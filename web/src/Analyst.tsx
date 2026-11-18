@@ -131,12 +131,16 @@ function Positions({ chart, series, v }: { chart: IChartApi; series: ISeriesApi<
   const visible = v.trades.filter((t) => (t.exit_time ?? Infinity) >= first)
   return (
     <svg width={w} height={h} className="pointer-events-none absolute left-0 top-0 z-[5] overflow-hidden">
-      {[...visible].sort((a, b) => Number(a.status === 'open') - Number(b.status === 'open') || (b.exit_time ?? 0) - (a.exit_time ?? 0)).map((t) => {
+      {/* open trades first so they sit underneath: their big boxes must not hide closed trades */}
+      {[...visible].sort((a, b) => Number(b.status === 'open') - Number(a.status === 'open') || (b.exit_time ?? 0) - (a.exit_time ?? 0)).map((t) => {
         const open = t.status === 'open', long = t.direction === 'long'
-        const x0 = Math.max(0, xOf(t.entry_time)), x1 = open ? w - 4 : xOf(t.exit_time!) + barW
+        const xe = xOf(t.entry_time), x0 = Math.max(0, xe)
+        const xExit = open ? w - 4 : xOf(t.exit_time!) + barW
+        // like TradingView's position tool, a box keeps a readable width even when the trade ended within a candle or two
+        const x1 = open ? xExit : Math.max(xExit, xe + Math.max(14 * barW, 70))
         if (x1 < 0 || x0 > w) return null
         const ye = yOf(t.entry_price), yt = yOf(t.target), ys = yOf(t.stop)
-        const a = open ? 0.3 : 0.15
+        const a = open ? 0.32 : 0.22
         const risk = Math.abs(t.entry_price - t.stop), rr = Math.abs(t.target - t.entry_price) / (risk || 1)
         const won = (t.pnl ?? 0) > 0, up = (t.now_r ?? 0) >= 0
         const tTxt = `Target ${fmtP(t.target)}  +${fmtUsd(usd(Math.abs(t.target - t.entry_price), t.qty))}  (+${rr.toFixed(1)}R)`
@@ -145,9 +149,12 @@ function Positions({ chart, series, v }: { chart: IChartApi; series: ISeriesApi<
         const right = (txt: string) => Math.max(4, w - width(txt) - 8)  // open-trade labels sit at the right edge, always fully visible
         const badge = `${won ? 'WIN' : 'LOSS'} ${signed(rOf(t))}R`, by = yOf(t.exit_price!)
         return <g key={t.id}>
-          <rect x={x0} y={Math.min(ye, yt)} width={Math.max(2, x1 - x0)} height={Math.abs(yt - ye)} fill="var(--bull)" fillOpacity={a} />
-          <rect x={x0} y={Math.min(ye, ys)} width={Math.max(2, x1 - x0)} height={Math.abs(ys - ye)} fill="var(--bear)" fillOpacity={a} />
+          <rect x={x0} y={Math.min(ye, yt)} width={Math.max(2, x1 - x0)} height={Math.abs(yt - ye)} fill="var(--bull)" fillOpacity={a}
+            stroke="var(--bull)" strokeOpacity={open ? 0.9 : 0.6} strokeWidth={1} />
+          <rect x={x0} y={Math.min(ye, ys)} width={Math.max(2, x1 - x0)} height={Math.abs(ys - ye)} fill="var(--bear)" fillOpacity={a}
+            stroke="var(--bear)" strokeOpacity={open ? 0.9 : 0.6} strokeWidth={1} />
           <line x1={x0} x2={x1} y1={ye} y2={ye} stroke="var(--text-2)" strokeDasharray="5 4" strokeWidth={1} />
+          {!open && <circle cx={xExit - barW / 2} cy={yOf(t.exit_price!)} r={4} fill={won ? 'var(--bull)' : 'var(--bear)'} stroke="var(--panel)" strokeWidth={1.5} />}
           {open ? <>
             {label(right(tTxt), yt + (long ? 14 : -14), tTxt, 'var(--bull)', 't')}
             {label(right(eTxt), ye, eTxt, 'var(--text)', 'e')}
