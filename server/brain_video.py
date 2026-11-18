@@ -23,7 +23,6 @@ model saw on the frame at that moment ("shown" = drawn/labelled on screen or nam
 interpretation, weaker evidence; "(uncertain)" = unclear frame). Only extract concepts supported by the speech or explicitly shown on
 screen. Use the timestamp of the clearest moment where explanation and visuals line up, copied exactly from a line's start (e.g. 4:32).
 excerpt must be copied verbatim from one SPEECH line when possible."""
-CHUNK = 50_000
 
 
 def run(jid, url, path, name):
@@ -91,6 +90,7 @@ def _pipeline(jid, url, path, name):
             s.add(src)
         src.platform = "youtube" if meta["platform"] == "youtube" else "video"
         src.title, src.author, src.status, src.complete, src.note = title[:300], meta.get("author"), "processing", False, meta.get("note")
+        src.content_kind = "video"
         src.content_hash, src.imported_at = digest, time.time()
         s.commit()
         sid = src.id
@@ -161,28 +161,10 @@ def _pipeline(jid, url, path, name):
 
     # 7. knowledge extraction over the combined timeline (chunked for long videos)
     text = V.timeline_text(segments, obs)
-    existing = None
-    data = {"main_topic": "", "concepts": [], "relationships": [], "claims": []}
-    seen_titles = set()
-    for i in range(0, len(text), CHUNK):
-        chunk = text[i:i + CHUNK]
-        if existing is None:
-            with db.session() as s:
-                existing = [{"title": n.title, "category": n.category, "summary": (n.summary or "")[:200]}
-                            for n in s.query(B.KnowledgeNode).filter(B.KnowledgeNode.category != "source").limit(200)]
-        ok, out = llm.ask_json(B.TASK + VIDEO_NOTE, {"SOURCE": {"title": title, "author": meta.get("author"), "platform": "video"},
-                                                    "EXISTING KNOWLEDGE": existing, "SOURCE CONTENT": chunk}, B.SCHEMA)
-        if not ok:
-            raise V.VideoError("Knowledge extraction failed: %s" % out)
-        part = B._validate(out, chunk)
-        data["main_topic"] = data["main_topic"] or part["main_topic"]
-        for c in part["concepts"]:
-            k = B.norm(c["title"])
-            if k not in seen_titles:
-                seen_titles.add(k)
-                data["concepts"].append(c)
-        data["relationships"] += part["relationships"]
-        data["claims"] += part["claims"]
+    try:
+        data = B.extract(text, {"title": title, "author": meta.get("author"), "platform": "video"}, VIDEO_NOTE)
+    except B.ImportError_ as e:
+        raise V.VideoError("Knowledge extraction failed: %s" % str(e).replace("The AI could not analyse this source: ", ""))
     by_cat = {}
     for c in data["concepts"]:
         by_cat[c["category"]] = by_cat.get(c["category"], 0) + 1

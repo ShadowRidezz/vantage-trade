@@ -199,6 +199,7 @@ class KnowledgeSource(Base):
     content_hash = Column(String, nullable=True)
     main_topic = Column(Text, nullable=True)
     claims = Column(JSON, nullable=True)  # claims the source makes that need independent verification
+    content_kind = Column(String, nullable=True)  # what was analysed: captions | page | transcript | video | title
     imported_at = Column(Float, default=now)
 
 
@@ -297,8 +298,21 @@ class BrainLayout(Base):
     y = Column(Float)
 
 
+# Columns added after a table first shipped. create_all() only creates missing tables, so add these by hand.
+# shortcut: hand-written ALTERs, not Alembic; switch to Alembic migrations once schema changes become frequent.
+ADDED_COLUMNS = {"knowledge_sources": [("content_kind", "VARCHAR")]}
+
+
 def init():
     Base.metadata.create_all(engine)
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    with engine.begin() as c:
+        for table, cols in ADDED_COLUMNS.items():
+            have = {x["name"] for x in insp.get_columns(table)}
+            for name, typ in cols:
+                if name not in have:
+                    c.execute(text("ALTER TABLE %s ADD COLUMN %s %s" % (table, name, typ)))
 
 
 def session() -> Session:

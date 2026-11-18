@@ -28,8 +28,11 @@ Everything else, including pattern detection and backtests, works without it.
   frames at scene, chart and drawing changes; Whisper transcribes the audio on your PC (GPU if available, otherwise CPU; the
   ~1.6 GB speech model downloads once); Claude's vision reads each frame together with what is being said at that moment.
   The combined timeline becomes knowledge with timestamps. Review Video Analysis shows every frame, transcript excerpt and
-  extracted rule, and lets you correct interpretations (with history). A YouTube link alone only gives the title: YouTube
-  does not give apps access to video or audio, and VANTAGE TRADE does not bypass that. Imported claims are never treated as verified; strategies count as tested only after a backtest here.
+  extracted rule, and lets you correct interpretations (with history).
+- **YouTube links** – with just a link, VANTAGE TRADE reads the video's public captions (creator-made, else YouTube's
+  auto-generated ones) through the youtube-transcript-api library, which uses the same route as YouTube's player. It is
+  not an official API and YouTube can refuse it; private, members-only, age-restricted and caption-less videos are not
+  worked around. Caption imports are labelled "captions only": what the video shows is analysed only from an attached file. Imported claims are never treated as verified; strategies count as tested only after a backtest here.
   The AI Analyst uses this knowledge when explaining the chart.
 
 Market data: Yahoo Finance, delayed. Futures are continuous front-month series.

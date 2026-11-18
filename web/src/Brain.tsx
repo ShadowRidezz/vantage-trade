@@ -466,7 +466,7 @@ function SourcesTab({ open, onReview }: { open: (id: number) => void; onReview: 
               {s.note && <div className="pl-6 text-[11px] text-warn">{s.note}</div>}
               {s.claims && s.claims.length > 0 && <div className="pl-6 text-[11px] text-text-2">Claims to verify: {s.claims.join(' · ')}</div>}</td>
             <td className="px-3 py-2"><span className="flex items-center gap-1.5"><StatusDot status={s.status} />{s.status}</span></td>
-            <td className="px-3 py-2 font-mono text-[12px]">{s.analysis_id ? (s.has_audio ? 'video + audio' : 'video only, no audio') : s.complete ? `${s.content_chars.toLocaleString()} chars` : 'title only'}</td>
+            <td className="px-3 py-2 font-mono text-[12px]">{s.analysis_id ? (s.has_audio ? 'video + audio' : 'video only, no audio') : !s.complete ? 'title only' : s.content_kind === 'captions' ? `public captions, ${s.content_chars.toLocaleString()} chars` : s.content_kind === 'transcript' ? `pasted transcript, ${s.content_chars.toLocaleString()} chars` : `${s.content_chars.toLocaleString()} chars of page text`}</td>
             <td className="px-3 py-2 font-mono">{s.concepts}</td><td className="px-3 py-2 whitespace-nowrap text-text-2">{fmtT(s.imported_at)}</td>
             <td className="px-3 py-2"><div className="flex gap-1">{s.analysis_id && <Btn onClick={() => onReview(s.analysis_id!)}><Film size={12} />Review</Btn>}{s.node_id && <Btn onClick={() => open(s.node_id!)}>View</Btn>}
               <Btn kind="danger" onClick={() => confirm(`Delete "${s.title}"? Knowledge that only this source supported is removed too.`) && del.mutate(s.id)}><Trash2 size={12} /></Btn></div></td>

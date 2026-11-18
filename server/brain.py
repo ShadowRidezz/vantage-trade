@@ -534,12 +534,18 @@ def _pipeline(jid, url, kind, transcript):
                 "YouTube" if plat == "youtube" else "TikTok", e))
         _step(jid, 1, "%s: %s%s" % ("YouTube" if plat == "youtube" else "TikTok", meta["title"], " by %s" % meta["author"] if meta["author"] else ""))
         if transcript.strip():
-            text, complete = transcript, True
+            text, complete, content_kind = transcript, True, "transcript"
         else:
-            text = meta["title"] or ""
-            note = ("Only the title and channel were available. A %s link does not give apps access to the video or its audio, and VANTAGE TRADE "
-                    "does not bypass that. To analyse what the video shows and says, attach the video file (one you have the right to use) "
-                    "together with this link, or paste the transcript." % ("YouTube" if plat == "youtube" else "TikTok"))
+            caps = youtube_captions(curl) if plat == "youtube" else {"ok": False, "reason": "TikTok does not publish captions to other apps."}
+            if caps["ok"]:
+                text, complete, content_kind = caps["text"], True, "captions"
+                note = ("Analysed from the video's public YouTube captions (%s). Only what is said was analysed, not what the video shows. "
+                        "Attach the video file for a full visual analysis." % caps["label"])
+                caption_detail = "%s lines of public YouTube captions (%s), %s" % ("{:,}".format(caps["lines"]), caps["label"], caps["span"])
+            else:
+                text, content_kind = meta["title"] or "", "title"
+                note = ("Only the title and channel were available: %s To analyse what the video says and shows, attach the video file "
+                        "(one you have the right to use) together with this link, or paste the transcript." % caps["reason"])
     else:
         final, ctype, body = fetch(curl)
         if "html" not in ctype and "text" not in ctype:
@@ -549,36 +555,36 @@ def _pipeline(jid, url, kind, transcript):
         meta.update(title=h["title"] or u.hostname, author=h["author"], published=h["published"], description=h["description"])
         _step(jid, 1, "%s: %s" % (plat.title(), meta["title"]))
         text = transcript if transcript.strip() else h["text"]
+        content_kind = "transcript" if transcript.strip() else "page"
         complete = len(text) >= 600
         if not complete:
             note = ("Very little readable text was found (%d characters). The page may load its content with JavaScript, need a login, "
                     "or be behind a paywall. Paste the text as notes to analyse it." % len(text))
-    text = text[:MAX_CHARS]
+    text = text[:MAX_CHARS * 8]  # long transcripts are analysed in chunks, up to ~8 hours of speech
     with db.session() as s:
         src = s.get(KnowledgeSource, old.id) if old else KnowledgeSource(url=curl)  # re-attach: `old` came from a closed session
         if not old:
             s.add(src)
         src.platform, src.title, src.author, src.published = plat, (meta["title"] or curl)[:300], meta["author"], meta["published"]
         src.status, src.complete, src.note, src.content_chars = ("processing" if complete else "incomplete"), complete, note, len(text)
+        src.content_kind = content_kind
         src.content_hash, src.imported_at = hashlib.sha256(text.encode("utf-8")).hexdigest(), time.time()
         s.commit()
         sid = src.id
     if not complete:
         _finish(jid, "incomplete", note, {"new_concepts": 0, "updated_concepts": 0, "new_connections": 0}, sid)
         return sid
-    _step(jid, 2, "%s characters of %s" % ("{:,}".format(len(text)), "transcript/notes" if transcript.strip() else "page text"))
+    _step(jid, 2, caption_detail if content_kind == "captions" else "%s characters of %s" % (
+        "{:,}".format(len(text)), "transcript/notes" if content_kind == "transcript" else "page text"))
 
-    with db.session() as s:
-        existing = [{"title": n.title, "category": n.category, "summary": (n.summary or "")[:200]}
-                    for n in s.query(KnowledgeNode).filter(KnowledgeNode.category != "source").limit(200)]
-    ok, out = llm.ask_json(TASK, {"SOURCE": {"title": meta["title"], "author": meta["author"], "platform": plat},
-                                  "EXISTING KNOWLEDGE": existing, "SOURCE CONTENT": text}, SCHEMA)
-    if not ok:
+    try:
+        data = extract(text, {"title": meta["title"], "author": meta["author"], "platform": plat},
+                       CAPTIONS_NOTE if content_kind == "captions" else "")
+    except ImportError_:
         with db.session() as s:
             s.get(KnowledgeSource, sid).status = "failed"
             s.commit()
-        raise ImportError_("The AI could not analyse this source: %s" % out)
-    data = _validate(out, text)
+        raise
     if not data["concepts"]:
         with db.session() as s:
             src = s.get(KnowledgeSource, sid)
@@ -591,6 +597,89 @@ def _pipeline(jid, url, kind, transcript):
     res = merge(sid, meta, data, jid)
     _finish(jid, "done", None, res, sid)
     return sid
+
+
+CHUNK = 50_000
+CAPTIONS_NOTE = """
+SOURCE CONTENT is a video's caption track, one line per stretch of speech, each starting with its m:ss timestamp. Auto-generated
+captions can mishear trading terms (e.g. "fair value cap"): interpret obvious mishearings, but never invent content. Use the timestamp
+at the start of the line where a concept is explained; excerpt must be copied verbatim from one line (without its timestamp)."""
+
+
+def extract(text, source, task_suffix=""):
+    """Knowledge from a long text, analysed in chunks so nothing is cut off. Raises ImportError_ if the AI fails."""
+    with db.session() as s:
+        existing = [{"title": n.title, "category": n.category, "summary": (n.summary or "")[:200]}
+                    for n in s.query(KnowledgeNode).filter(KnowledgeNode.category != "source").limit(200)]
+    data, seen = {"main_topic": "", "concepts": [], "relationships": [], "claims": []}, set()
+    for i in range(0, len(text), CHUNK):
+        chunk = text[i:i + CHUNK]
+        ok, out = llm.ask_json(TASK + task_suffix, {"SOURCE": source, "EXISTING KNOWLEDGE": existing, "SOURCE CONTENT": chunk}, SCHEMA)
+        if not ok:
+            raise ImportError_("The AI could not analyse this source: %s" % out)
+        part = _validate(out, chunk)
+        data["main_topic"] = data["main_topic"] or part["main_topic"]
+        for c in part["concepts"]:
+            if norm(c["title"]) not in seen:
+                seen.add(norm(c["title"]))
+                data["concepts"].append(c)
+        data["relationships"] += part["relationships"]
+        data["claims"] += part["claims"]
+    data["claims"] = data["claims"][:15]
+    return data
+
+
+def youtube_captions(url):
+    """A video's public captions (the ones anyone can turn on in YouTube's player), as timestamped lines.
+
+    Uses youtube-transcript-api, which reads the same caption route the YouTube player uses. It is not an official API and
+    YouTube can refuse it; then the reason is reported. Private, members-only and age-restricted videos are not worked around."""
+    vid = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query)).get("v", "")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{11}", vid):
+        return {"ok": False, "reason": "That is not a valid YouTube video link."}
+    reasons = {
+        "TranscriptsDisabled": "the creator has turned captions off for this video.",
+        "NoTranscriptFound": "the video has no captions in a usable language.",
+        "VideoUnavailable": "the video is unavailable (private, removed or region-blocked).",
+        "AgeRestricted": "the video is age-restricted, and VANTAGE TRADE does not sign in to get around that.",
+        "VideoUnplayable": "the video can't be played without signing in.",
+        "RequestBlocked": "YouTube is temporarily refusing caption requests from this network.",
+        "IpBlocked": "YouTube is temporarily refusing caption requests from this network.",
+        "PoTokenRequired": "YouTube wants a sign-in token for these captions, which is not worked around.",
+    }
+    try:
+        from youtube_transcript_api import YouTubeTranscriptApi
+        tl = YouTubeTranscriptApi().list(vid)
+        tr, label = None, None
+        for finder, lab in ((tl.find_manually_created_transcript, "made by the creator"), (tl.find_generated_transcript, "auto-generated by YouTube")):
+            try:
+                tr, label = finder(["en", "en-US", "en-GB"]), lab
+                break
+            except Exception:  # noqa: BLE001 - try the next kind
+                continue
+        if tr is None:
+            tr = next((t.translate("en") for t in tl if t.is_translatable), None)
+            label = "auto-translated to English by YouTube"
+        if tr is None:
+            return {"ok": False, "reason": reasons["NoTranscriptFound"]}
+        snips = [(float(x.start), x.text.replace("\n", " ").strip()) for x in tr.fetch().snippets if x.text and x.text.strip()]
+    except Exception as e:  # noqa: BLE001 - the library raises many specific errors; report them plainly
+        return {"ok": False, "reason": reasons.get(type(e).__name__, "YouTube's captions could not be read (%s)." % type(e).__name__)}
+    if not snips:
+        return {"ok": False, "reason": "the captions are empty."}
+    lines, cur, t0 = [], [], None  # merge short caption snippets into ~15 s lines that keep their start time
+    for t, s in snips:
+        if cur and (t - t0 >= 15 or len(" ".join(cur)) > 400):  # close the line before a snippet that would stretch it
+            lines.append((t0, " ".join(cur)))
+            cur = []
+        if not cur:
+            t0 = t
+        cur.append(s)
+    if cur:
+        lines.append((t0, " ".join(cur)))
+    ts = lambda t: "%d:%02d:%02d" % (t // 3600, t // 60 % 60, t % 60) if t >= 3600 else "%d:%02d" % (t // 60, t % 60)
+    return {"ok": True, "label": label, "lines": len(snips), "span": ts(int(snips[-1][0])),
+            "text": "\n".join("%s %s" % (ts(int(t)), s) for t, s in lines)}
 
 
 def merge(sid, meta, data, jid=None, steps=(4, 5)):

@@ -9,7 +9,7 @@ export type KEdge = { id: number; src: number; dst: number; rel: string; explana
 export type Graph = { nodes: KNode[]; edges: KEdge[]; layout: Record<string, { x: number; y: number }>
   stats: { knowledge: number; strategies: number; patterns: number; skills: number; conditions: number; research: number; sources: number } }
 export type Source = { id: number; url: string; platform: string; title: string; author: string | null; published: string | null; status: string; complete: boolean
-  note: string | null; content_chars: number; imported_at: number; concepts: number; node_id: number | null; claims: string[] | null; main_topic: string | null; analysis_id: number | null; has_audio: boolean | null }
+  note: string | null; content_chars: number; imported_at: number; concepts: number; node_id: number | null; claims: string[] | null; main_topic: string | null; analysis_id: number | null; has_audio: boolean | null; content_kind: string | null }
 export type Job = { id: number; url: string; status: string; stage: string; steps: { name: string; done: boolean; skipped?: boolean; detail: string }[]; error: string | null
   result: { new_concepts: number; updated_concepts: number; new_connections: number } | null; source_id: number | null; started_at: number; completed_at: number | null }
 
