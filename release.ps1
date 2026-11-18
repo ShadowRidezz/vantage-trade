@@ -9,7 +9,7 @@ $api = "https://api.github.com/repos/ShadowRidezz/vantage-trade"
 
 # Build tools log to stderr; run them through cmd so PowerShell judges them by exit code only.
 cmd /c "npm --prefix web run build 2>&1"; if ($LASTEXITCODE) { throw "Web build failed" }
-cmd /c "cd server && .venv\Scripts\python -m PyInstaller --noconfirm --clean --onedir --name vantage-backend --distpath ..\desktop\backend-build --workpath ""%TEMP%\vt-pyi"" --specpath ""%TEMP%\vt-pyi"" --collect-submodules uvicorn --hidden-import websockets.legacy.server run_server.py 2>&1"
+cmd /c "cd server && .venv\Scripts\python -m PyInstaller --noconfirm --clean --onedir --name vantage-backend --distpath ..\desktop\backend-build --workpath ""%TEMP%\vt-pyi"" --specpath ""%TEMP%\vt-pyi"" --collect-submodules uvicorn --hidden-import websockets.legacy.server --collect-all faster_whisper --collect-all ctranslate2 --collect-all av --collect-all onnxruntime --collect-binaries imageio_ffmpeg --collect-data imageio_ffmpeg --hidden-import brain_video run_server.py 2>&1"
 if ($LASTEXITCODE) { throw "Backend build failed" }
 cmd /c "npm --prefix desktop run dist 2>&1"; if ($LASTEXITCODE) { throw "Installer build failed" }
 

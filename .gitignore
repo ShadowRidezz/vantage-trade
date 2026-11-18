@@ -8,3 +8,5 @@ web/dist/
 desktop/dist/
 desktop/backend-build/
 .claude/
+server/uploads/
+server/video/

@@ -2,11 +2,15 @@
 from __future__ import annotations
 
 import asyncio
+import mimetypes
+import os
 import re
+import uuid
 import time
 from typing import List, Optional
 
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
@@ -15,6 +19,8 @@ import llm
 import market as M
 import services as S
 import brain as B
+import brain_video as BV
+import video as V
 
 app = FastAPI(title="VANTAGE TRADE")
 SYM = r"^[A-Za-z0-9.\-^]{1,12}$"
@@ -333,9 +339,18 @@ def _b(fn, *a):
 
 
 class ImportReq(BaseModel):
-    url: str = Field(..., min_length=8, max_length=2000)
+    url: str = Field("", max_length=2000)
     kind: str = Field("auto", pattern="^(auto|youtube|tiktok|article|website)$")
     transcript: str = Field("", max_length=200_000)
+    upload_id: Optional[str] = Field(None, max_length=40)
+    upload_name: Optional[str] = Field(None, max_length=300)
+
+
+class FrameFix(BaseModel):
+    interpretation: str = Field(..., max_length=800)
+    concepts: List[dict] = Field(default_factory=list, max_length=10)
+    uncertain: bool = False
+    note: str = Field("", max_length=300)
 
 
 class LayoutItem(BaseModel):
@@ -368,7 +383,93 @@ def brain_layout_reset():
 
 @app.post("/api/brain/import")
 def brain_import(r: ImportReq):
-    return {"job_id": _b(B.start_import, r.url, r.kind, r.transcript)}
+    return {"job_id": _b(B.start_import, r.url, r.kind, r.transcript, r.upload_id, r.upload_name)}
+
+
+MAX_UPLOAD = 8 * 1024 ** 3
+
+
+@app.put("/api/brain/uploads")
+async def brain_upload(request: Request, name: str = Query(..., max_length=300)):
+    """Stream a user-provided video to disk (never held in memory). Only common video containers are accepted."""
+    ext = os.path.splitext(name)[1].lower()
+    if ext not in V.VIDEO_EXT:
+        raise HTTPException(400, "Unsupported file type. Use MP4, MOV, MKV, WebM, M4V or AVI.")
+    os.makedirs(B.UPLOAD_DIR, exist_ok=True)
+    uid = uuid.uuid4().hex + ext
+    path, size = os.path.join(B.UPLOAD_DIR, uid), 0
+    try:
+        with open(path, "wb") as f:
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > MAX_UPLOAD:
+                    raise HTTPException(413, "The video is larger than 8 GB.")
+                f.write(chunk)
+    except BaseException:
+        if os.path.exists(path):
+            os.remove(path)
+        raise
+    if size < 1024:
+        os.remove(path)
+        raise HTTPException(400, "The file is empty.")
+    try:
+        V.probe(path)
+    except V.VideoError as e:
+        os.remove(path)
+        raise HTTPException(400, str(e))
+    return {"upload_id": uid, "size": size}
+
+
+@app.get("/api/brain/videos/{aid}")
+def brain_video_review(aid: int):
+    return _b(BV.review, aid)
+
+
+@app.patch("/api/brain/frames/{fid}")
+def brain_frame_fix(fid: int, r: FrameFix):
+    return _b(BV.correct_frame, fid, r.interpretation, r.concepts, r.uncertain, r.note)
+
+
+@app.get("/api/brain/frames/{fid}/image")
+def brain_frame_image(fid: int):
+    return FileResponse(_b(BV.frame_image, fid), media_type="image/jpeg")
+
+
+@app.get("/api/brain/videos/{aid}/file")
+def brain_video_file(aid: int, request: Request):
+    """Serve the stored video with HTTP Range support so the review player can seek to any timestamp."""
+    path = _b(BV.video_file, aid)
+    size = os.path.getsize(path)
+    rng = request.headers.get("range")
+    mime = mimetypes.guess_type(path)[0] or "video/mp4"
+    start, end = 0, size - 1
+    if rng:
+        m = re.match(r"bytes=(\d*)-(\d*)", rng)
+        if not m:
+            raise HTTPException(416, "Bad range")
+        if m.group(1):
+            start = int(m.group(1))
+            end = int(m.group(2)) if m.group(2) else size - 1
+        else:
+            start = max(0, size - int(m.group(2)))
+        end = min(end, size - 1)
+        if start > end:
+            raise HTTPException(416, "Bad range")
+
+    def body():
+        with open(path, "rb") as f:
+            f.seek(start)
+            left = end - start + 1
+            while left > 0:
+                chunk = f.read(min(1 << 20, left))
+                if not chunk:
+                    break
+                left -= len(chunk)
+                yield chunk
+    headers = {"Accept-Ranges": "bytes", "Content-Length": str(end - start + 1)}
+    if rng:
+        headers["Content-Range"] = "bytes %d-%d/%d" % (start, end, size)
+    return StreamingResponse(body(), status_code=206 if rng else 200, media_type=mime, headers=headers)
 
 
 @app.get("/api/brain/jobs")

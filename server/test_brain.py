@@ -210,3 +210,23 @@ def test_imported_strategy_never_merges_into_built_in_strategy():
     with db.session() as s:
         built = s.query(db.KnowledgeNode).filter_by(origin="strategy:sweep_reversal").first()
         assert built is None or not s.query(db.SourceKnowledgeLink).filter_by(node_id=built.id).count()
+
+
+def test_fresh_install_import_never_duplicates_built_in_records():
+    db.init()
+    with db.session() as s:  # simulate an older database where an import created the node before the engine record existed
+        s.query(db.KnowledgeEdge).delete()
+        s.query(db.SourceKnowledgeLink).delete()
+        s.query(db.KnowledgeRevision).delete()
+        s.query(db.KnowledgeNode).delete()
+        s.add(db.KnowledgeNode(title="Fair Value Gaps", category="pattern", summary="imported", detail="What a video said.", verification="imported"))
+        s.commit()
+    r = B.merge(_source("https://i.example/9", "Nine"), {}, {"main_topic": "", "claims": [], "relationships": [],
+                "concepts": [_concept("Market Structure Shift")]})
+    assert r["new_concepts"] == 0 and r["updated_concepts"] == 1  # merged into the engine's MSS, created by the sync first
+    with db.session() as s:
+        fvg = [n for n in s.query(db.KnowledgeNode).filter_by(category="pattern") if B.norm(n.title) == "fair value gap"]
+        assert len(fvg) == 1 and fvg[0].origin == "engine:fvg"  # the earlier imported node was adopted, not duplicated
+        assert fvg[0].detail.startswith("Engine rule") and "From earlier sources: What a video said." in fvg[0].detail
+        mss = [n for n in s.query(db.KnowledgeNode) if B.norm(n.title) == "market structure shift"]
+        assert len(mss) == 1

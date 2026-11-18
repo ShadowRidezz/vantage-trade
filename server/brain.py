@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import hashlib
 import html
+import os
+import shutil
 import ipaddress
 import json
 import re
@@ -147,6 +149,14 @@ STRATEGY_EDGES = {
 
 def _node(s, origin, **kw):
     n = s.query(KnowledgeNode).filter_by(origin=origin).first()
+    if n is None and origin.split(":")[0] in ("engine", "strategy"):
+        # an import may have created this concept before the app's own record existed: adopt it, keep what it learned
+        key = norm(kw.get("title", ""))
+        n = next((x for x in s.query(KnowledgeNode).filter_by(category=kw.get("category"), origin=None) if norm(x.title) == key), None)
+        if n is not None:
+            n.origin = origin
+            if n.detail and "\n\nFrom " not in n.detail:
+                n.detail = "\n\nFrom earlier sources: " + n.detail
     if n is None:
         n = KnowledgeNode(origin=origin, **kw)
         s.add(n)
@@ -409,36 +419,64 @@ _lock = threading.Lock()
 _recent = []  # import start times, for rate limiting
 
 
-def start_import(url, kind="auto", transcript=""):
+VIDEO_STEPS = ("Video identified", "Video file accessed", "Audio extracted", "Transcript generated", "Video frames extracted",
+               "Visual analysis completed", "Trading concepts identified", "Knowledge connections created", "Saved to AI Brain")
+UPLOAD_DIR = os.path.join(db._DIR, "uploads")
+VIDEO_DIR = os.path.join(db._DIR, "video")
+
+
+def upload_path(upload_id):
+    if not re.fullmatch(r"[0-9a-f]{32}\.(mp4|mov|mkv|webm|m4v|avi)", upload_id or ""):
+        raise ImportError_("Unknown upload.")
+    p = os.path.join(UPLOAD_DIR, upload_id)
+    if not os.path.isfile(p):
+        raise ImportError_("The uploaded video file is no longer available. Attach it again.")
+    return p
+
+
+def start_import(url, kind="auto", transcript="", upload_id=None, upload_name=None):
     url = (url or "").strip()
     transcript = (transcript or "")[:200_000]
     now = time.time()
     _recent[:] = [t for t in _recent if now - t < 3600]
     if len(_recent) >= 30:
         raise ImportError_("Import limit reached (30 per hour). Try again later.")
-    u = check_url(url)  # refuse unsafe and duplicate links before any work starts
-    with db.session() as s:
-        dup = s.query(KnowledgeSource).filter_by(url=canonical(u)).filter(KnowledgeSource.status.in_(("complete", "processing"))).first()
-        if dup and not transcript.strip():
-            raise ImportError_("This source is already in the AI Brain (\"%s\"). Add a transcript or notes to re-analyse it." % dup.title)
+    if not url and not upload_id:
+        raise ImportError_("Paste a URL or attach a video file.")
+    video = upload_path(upload_id) if upload_id else None
+    if url:
+        u = check_url(url)  # refuse unsafe and duplicate links before any work starts
+        with db.session() as s:
+            dup = s.query(KnowledgeSource).filter_by(url=canonical(u)).filter(KnowledgeSource.status.in_(("complete", "processing"))).first()
+            analysed = dup and s.query(db.VideoAnalysis).filter_by(source_id=dup.id).first()
+            if dup and ((not video and not transcript.strip()) or analysed):
+                raise ImportError_("This source is already in the AI Brain (\"%s\").%s" % (
+                    dup.title, "" if analysed else " Attach the video file or add a transcript to analyse it fully."))
+    steps = VIDEO_STEPS if video else STEPS
     with db.session() as s:
         if s.query(ImportJob).filter_by(status="running").count():
             raise ImportError_("Another source is still being analysed. Wait for it to finish.")
-        job = ImportJob(url=url, status="running", stage=STEPS[0], steps=[{"name": n, "done": False, "detail": ""} for n in STEPS])
+        job = ImportJob(url=url or "file: %s" % (upload_name or "video"), status="running", stage=steps[0],
+                        steps=[{"name": n, "done": False, "detail": ""} for n in steps])
         s.add(job)
         s.commit()
         jid = job.id
     _recent.append(now)
-    threading.Thread(target=_run, args=(jid, url, kind, transcript), daemon=True).start()
+    if video:
+        import brain_video  # lazy: brain_video imports this module
+        threading.Thread(target=brain_video.run, args=(jid, url, video, upload_name or "video"), daemon=True).start()
+    else:
+        threading.Thread(target=_run, args=(jid, url, kind, transcript), daemon=True).start()
     return jid
 
 
-def _step(jid, i, detail=""):
+def _step(jid, i, detail="", skipped=False):
     with db.session() as s:
         j = s.get(ImportJob, jid)
         steps = [dict(x) for x in j.steps]
-        steps[i].update(done=True, detail=detail)
-        j.steps, j.stage = steps, STEPS[i + 1] if i + 1 < len(STEPS) else "done"
+        steps[i].update(done=not skipped, skipped=skipped, detail=detail)
+        nxt = next((x["name"] for x in steps[i + 1:] if not x.get("done") and not x.get("skipped")), "done")
+        j.steps, j.stage = steps, nxt
         s.commit()
 
 
@@ -499,9 +537,9 @@ def _pipeline(jid, url, kind, transcript):
             text, complete = transcript, True
         else:
             text = meta["title"] or ""
-            note = ("Only the title was available. %s does not give third-party apps a video's transcript without the creator's authorisation. "
-                    "Paste the transcript (on YouTube: ... > Show transcript) or your own notes and import again to analyse the full video." % (
-                        "YouTube" if plat == "youtube" else "TikTok"))
+            note = ("Only the title and channel were available. A %s link does not give apps access to the video or its audio, and VANTAGE TRADE "
+                    "does not bypass that. To analyse what the video shows and says, attach the video file (one you have the right to use) "
+                    "together with this link, or paste the transcript." % ("YouTube" if plat == "youtube" else "TikTok"))
     else:
         final, ctype, body = fetch(curl)
         if "html" not in ctype and "text" not in ctype:
@@ -555,9 +593,11 @@ def _pipeline(jid, url, kind, transcript):
     return sid
 
 
-def merge(sid, meta, data, jid=None):
+def merge(sid, meta, data, jid=None, steps=(4, 5)):
     """Add the extracted knowledge, reusing existing nodes instead of duplicating them."""
     new = updated = edges = 0
+    with db.session() as s:
+        sync_system(s)  # the app's own records must exist first, or a fresh install would duplicate them
     with db.session() as s:
         src = s.get(KnowledgeSource, sid)
         src.main_topic, src.claims, src.status = data["main_topic"], data["claims"], "complete"
@@ -602,8 +642,9 @@ def merge(sid, meta, data, jid=None):
                 edges += _edge(s, a, r["type"], b, r["explanation"], sid)
         s.commit()
     if jid:
-        _step(jid, 4, "%d new, %d existing updated" % (new, updated))
-        _step(jid, 5, "%d connections" % edges)
+        if steps[0] is not None:
+            _step(jid, steps[0], "%d new, %d existing updated" % (new, updated))
+        _step(jid, steps[1], "%d new, %d existing updated, %d connections" % (new, updated, edges) if steps[0] is None else "%d connections" % edges)
     return {"new_concepts": new, "updated_concepts": updated, "new_connections": edges}
 
 
@@ -642,6 +683,8 @@ def delete_source(sid):
                 _verify(s, n)
         s.query(ImportJob).filter_by(source_id=sid).update({"source_id": None})
         s.query(KnowledgeRevision).filter_by(source_id=sid).update({"source_id": None})
+        import brain_video
+        brain_video.delete_for_source(s, sid)
         s.delete(src)
         s.commit()
 
@@ -738,6 +781,9 @@ def sources():
             r["concepts"] = s.query(SourceKnowledgeLink).filter_by(source_id=src.id).count()
             sn = s.query(KnowledgeNode).filter_by(origin="source:%d" % src.id).first()
             r["node_id"] = sn.id if sn else None
+            va = s.query(db.VideoAnalysis).filter_by(source_id=src.id).first()
+            r["analysis_id"] = va.id if va else None
+            r["has_audio"] = va.has_audio if va else None
             out.append(r)
         return out
 

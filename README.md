@@ -23,8 +23,13 @@ Everything else, including pattern detection and backtests, works without it.
 - **Research** – recurring issues become hypotheses that are kept only if they win on unseen (out-of-sample) data.
 - **AI Brain** – a persistent knowledge graph. Paste a YouTube, TikTok, article or website link and the AI extracts the
   patterns, strategies, skills and market conditions it explains, links them to what it already knows (no duplicates,
-  disagreements kept), and cites the source with verbatim quotes and timestamps. Videos need a pasted transcript for full
-  analysis. Imported claims are never treated as verified; strategies count as tested only after a backtest here.
+  disagreements kept), and cites the source with verbatim quotes and timestamps.
+- **Video analysis** – attach a video file (one you have the right to use), optionally with its YouTube link. FFmpeg samples
+  frames at scene, chart and drawing changes; Whisper transcribes the audio on your PC (GPU if available, otherwise CPU; the
+  ~1.6 GB speech model downloads once); Claude's vision reads each frame together with what is being said at that moment.
+  The combined timeline becomes knowledge with timestamps. Review Video Analysis shows every frame, transcript excerpt and
+  extracted rule, and lets you correct interpretations (with history). A YouTube link alone only gives the title: YouTube
+  does not give apps access to video or audio, and VANTAGE TRADE does not bypass that. Imported claims are never treated as verified; strategies count as tested only after a backtest here.
   The AI Analyst uses this knowledge when explaining the chart.
 
 Market data: Yahoo Finance, delayed. Futures are continuous front-month series.

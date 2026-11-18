@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { BarChart3, Brain, FileText, FlaskConical, Globe, GraduationCap, Music2, Target, TrendingUp, Youtube, type LucideIcon } from 'lucide-react'
+import { BarChart3, Brain, FileText, Film, FlaskConical, Globe, GraduationCap, Music2, Target, TrendingUp, Youtube, type LucideIcon } from 'lucide-react'
 import { api } from './api'
 import { useSettings } from './store'
 
@@ -9,8 +9,8 @@ export type KEdge = { id: number; src: number; dst: number; rel: string; explana
 export type Graph = { nodes: KNode[]; edges: KEdge[]; layout: Record<string, { x: number; y: number }>
   stats: { knowledge: number; strategies: number; patterns: number; skills: number; conditions: number; research: number; sources: number } }
 export type Source = { id: number; url: string; platform: string; title: string; author: string | null; published: string | null; status: string; complete: boolean
-  note: string | null; content_chars: number; imported_at: number; concepts: number; node_id: number | null; claims: string[] | null; main_topic: string | null }
-export type Job = { id: number; url: string; status: string; stage: string; steps: { name: string; done: boolean; detail: string }[]; error: string | null
+  note: string | null; content_chars: number; imported_at: number; concepts: number; node_id: number | null; claims: string[] | null; main_topic: string | null; analysis_id: number | null; has_audio: boolean | null }
+export type Job = { id: number; url: string; status: string; stage: string; steps: { name: string; done: boolean; skipped?: boolean; detail: string }[]; error: string | null
   result: { new_concepts: number; updated_concepts: number; new_connections: number } | null; source_id: number | null; started_at: number; completed_at: number | null }
 
 /** One colour per category, everywhere in the Brain (graph, badges, lists). Light theme uses deeper shades for contrast. */
@@ -27,7 +27,7 @@ export const CATS: [Cat, string, string, LucideIcon][] = [
 export const catLabel = (c: string) => CATS.find((x) => x[0] === c)?.[2] ?? c
 export const catIcon = (c: string): LucideIcon => CATS.find((x) => x[0] === c)?.[3] ?? Brain
 
-export const platformIcon = (p: string): LucideIcon => (p === 'youtube' ? Youtube : p === 'tiktok' ? Music2 : p === 'article' ? FileText : Globe)
+export const platformIcon = (p: string): LucideIcon => (p === 'youtube' ? Youtube : p === 'tiktok' ? Music2 : p === 'article' ? FileText : p === 'video' ? Film : Globe)
 export const platformColor = (p: string) => (p === 'youtube' ? '#EF4444' : p === 'tiktok' ? 'var(--text)' : 'var(--text-2)')
 
 export const VERIFY: Record<string, [string, string]> = {

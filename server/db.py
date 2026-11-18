@@ -237,6 +237,59 @@ class KnowledgeRevision(Base):
     created_at = Column(Float, default=now)
 
 
+class VideoAnalysis(Base):
+    __tablename__ = "video_analyses"
+    id = Column(Integer, primary_key=True)
+    source_id = Column(Integer, ForeignKey("knowledge_sources.id"), index=True)
+    file_name = Column(String)
+    file_hash = Column(String, index=True)
+    file_path = Column(String, nullable=True)  # kept for in-app playback in the review; removed with the source
+    duration = Column(Float)
+    width = Column(Integer)
+    height = Column(Integer)
+    has_audio = Column(Boolean)
+    frames_analyzed = Column(Integer, default=0)
+    transcript_coverage = Column(Float, default=0.0)  # % of the video's length with recognised speech
+    info = Column(JSON, nullable=True)  # transcription device/language, sampling settings
+    created_at = Column(Float, default=now)
+
+
+class VideoFrame(Base):
+    __tablename__ = "video_frames"
+    id = Column(Integer, primary_key=True)
+    analysis_id = Column(Integer, ForeignKey("video_analyses.id"), index=True)
+    t = Column(Float)
+    reason = Column(String)  # why this frame was sampled: start | interval | scene change | chart or drawing changed
+    image_path = Column(String)
+    shows_chart = Column(Boolean, default=False)
+    symbol = Column(String, default="")
+    timeframe = Column(String, default="")
+    on_screen = Column(Text, default="")
+    concepts = Column(JSON)
+    interpretation = Column(Text, default="")
+    uncertain = Column(Boolean, default=False)
+    corrected = Column(Boolean, default=False)
+
+
+class TranscriptSegment(Base):
+    __tablename__ = "transcript_segments"
+    id = Column(Integer, primary_key=True)
+    analysis_id = Column(Integer, ForeignKey("video_analyses.id"), index=True)
+    start = Column(Float)
+    end = Column(Float)
+    text = Column(Text)
+
+
+class FrameRevision(Base):
+    __tablename__ = "frame_revisions"
+    id = Column(Integer, primary_key=True)
+    frame_id = Column(Integer, ForeignKey("video_frames.id"), index=True)
+    previous = Column(JSON)
+    updated = Column(JSON)
+    reason = Column(Text)
+    created_at = Column(Float, default=now)
+
+
 class BrainLayout(Base):
     __tablename__ = "brain_layout"
     key = Column(String, primary_key=True)  # "ai", "cat:pattern", "n:12"
