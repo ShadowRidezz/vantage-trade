@@ -8,7 +8,7 @@ import { Backtesting } from './Backtesting'
 import { Journal } from './Journal'
 import { Empty } from './ui'
 
-const Brain = lazy(() => import('./Brain').then((m) => ({ default: m.Brain }))) // three.js only loads when opened
+const Brain = lazy(() => import('./Brain').then((m) => ({ default: m.Brain }))) // graph library only loads when opened
 
 export function App() {
   const page = useSettings((s) => s.page)

@@ -14,6 +14,7 @@ import db
 import llm
 import market as M
 import services as S
+import brain as B
 
 app = FastAPI(title="VANTAGE TRADE")
 SYM = r"^[A-Za-z0-9.\-^]{1,12}$"
@@ -324,9 +325,81 @@ def trade_replay(tid: int):
 
 # ---------------------------------------------------------------- AI Brain
 
-@app.get("/api/brain")
-def brain():
-    return S.brain()
+def _b(fn, *a):
+    try:
+        return fn(*a)
+    except B.ImportError_ as e:
+        raise HTTPException(400, str(e))
+
+
+class ImportReq(BaseModel):
+    url: str = Field(..., min_length=8, max_length=2000)
+    kind: str = Field("auto", pattern="^(auto|youtube|tiktok|article|website)$")
+    transcript: str = Field("", max_length=200_000)
+
+
+class LayoutItem(BaseModel):
+    key: str = Field(..., pattern=r"^(ai|cat:[a-z]+|n:\d+)$")
+    x: float
+    y: float
+
+
+@app.get("/api/brain/graph")
+def brain_graph():
+    return B.graph()
+
+
+@app.get("/api/brain/nodes/{nid}")
+def brain_node(nid: int):
+    return _b(B.node_detail, nid)
+
+
+@app.put("/api/brain/layout")
+def brain_layout(items: List[LayoutItem]):
+    B.save_layout([i.model_dump() for i in items])
+    return {"ok": True}
+
+
+@app.delete("/api/brain/layout")
+def brain_layout_reset():
+    B.reset_layout()
+    return {"ok": True}
+
+
+@app.post("/api/brain/import")
+def brain_import(r: ImportReq):
+    return {"job_id": _b(B.start_import, r.url, r.kind, r.transcript)}
+
+
+@app.get("/api/brain/jobs")
+def brain_jobs():
+    return B.jobs()
+
+
+@app.get("/api/brain/jobs/{jid}")
+def brain_job(jid: int):
+    return _b(B.job, jid)
+
+
+@app.get("/api/brain/sources")
+def brain_sources():
+    return B.sources()
+
+
+@app.delete("/api/brain/sources/{sid}")
+def brain_source_delete(sid: int):
+    _b(B.delete_source, sid)
+    return {"ok": True}
+
+
+@app.get("/api/brain/history")
+def brain_history():
+    return B.history()
+
+
+@app.get("/api/brain/strategy-lab")
+def brain_lab():
+    return B.strategy_lab()
 
 
 # ---------------------------------------------------------------- built web app (single-process launch)

@@ -10,6 +10,7 @@ import backtest as B
 import db
 import llm
 import market as M
+import brain as Br
 from db import (AnalysisRun, Backtest, Condition, Detection, Experiment, Lesson, Review, Strategy, StrategyVersion,
                 Trade, row)
 
@@ -179,6 +180,9 @@ def context(symbol, tf):
                             "liquidity": "Only the 'Liquidity' patterns (equal highs = buy-side, equal lows = sell-side) and sweeps are liquidity. "
                                          "Range equilibrium is not liquidity.",
                             "active": "Not yet filled, swept or invalidated as of the latest closed candle.",
+                            "brain_knowledge": "Stored AI Brain records about the patterns on this chart. verification 'built-in rule' = how this app's engine "
+                                               "detects it; 'tested' = backtested here; 'imported' = only what one outside source claims (unverified); "
+                                               "'corroborated' = several sources agree; 'disputed' = sources disagree. Cite the source title when you use one.",
                             "backtest_units": "In backtest metrics, avg_win, avg_loss, expectancy, net_pnl, max_drawdown and end_equity are "
                                               "US dollars of simulated P&L (not points); win_rate and max_drawdown_pct are percentages; "
                                               "avg_rr is average win / average loss; avg_r is the average R multiple."},
@@ -191,6 +195,7 @@ def context(symbol, tf):
             "active_levels_within_3_atr_nearest_first": near[:25],
             "recent_detections_oldest_first": events[-60:], "strategy_conditions_now": p["strategies"],
             "backtests_for_this_market": bts or "none stored",
+            "brain_knowledge": Br.retrieve(sorted({d["kind"] for d in p["detections"]})) or "none stored",
             "journal": {"simulated_trades": len(trades), "closed": len(closed), "net_pnl": round(sum(t.pnl or 0 for t in closed), 2)}}
 
 
@@ -577,63 +582,3 @@ def adopt(vid):
         v.status = "active"
         s.commit()
         return row(v)
-
-
-# ---------------------------------------------------------------- AI Brain
-
-def brain():
-    nodes, links = [], []
-    add = lambda i, t, label, data: nodes.append({"id": i, "type": t, "label": label, "data": data})
-    link = lambda a, b, rel: links.append({"source": a, "target": b, "rel": rel})
-    with db.session() as s:
-        strat = {x.id: x for x in s.query(Strategy)}
-        for st in strat.values():
-            add("s%d" % st.id, "strategy", st.name, row(st))
-        vers = {v.id: v for v in s.query(StrategyVersion)}
-        for v in vers.values():
-            add("v%d" % v.id, "version", "%s v%d" % (strat[v.strategy_id].name, v.version), row(v))
-            link("v%d" % v.id, "s%d" % v.strategy_id, "version of")
-            if v.parent_id:
-                link("v%d" % v.id, "v%d" % v.parent_id, "derived from")
-        exps = {e.id: e for e in s.query(Experiment)}
-        for e in exps.values():
-            add("x%d" % e.id, "failed" if e.status == "rejected" else "evaluation",
-                "Hypothesis #%d %s" % (e.id, json.dumps(e.change)), row(e))
-            link("x%d" % e.id, "v%d" % e.base_version_id, "tests change to")
-            if e.candidate_version_id:
-                link("x%d" % e.id, "v%d" % e.candidate_version_id, "produced")
-        for b in s.query(Backtest.id, Backtest.version_id, Backtest.symbol, Backtest.tf, Backtest.segment, Backtest.metrics,
-                         Backtest.experiment_id, Backtest.start, Backtest.end, Backtest.created_at):
-            add("b%d" % b.id, "backtest", "Backtest #%d %s %s %s" % (b.id, b.symbol, b.tf, b.segment.replace("_", " ")),
-                {"id": b.id, "symbol": b.symbol, "tf": b.tf, "segment": b.segment, "metrics": b.metrics, "start": b.start, "end": b.end,
-                 "created_at": b.created_at})
-            link("b%d" % b.id, "v%d" % b.version_id, "tested")
-            if b.experiment_id:
-                link("b%d" % b.id, "x%d" % b.experiment_id, "evidence for")
-        used = {t.condition_id for t in s.query(Trade.condition_id)}
-        for c in s.query(Condition).filter(Condition.id.in_(used)) if used else []:
-            add("c%d" % c.id, "condition", "%s %s %s / %s" % (c.symbol, c.tf, c.bias, c.zone or "-"), row(c))
-        pats = set()
-        for t in s.query(Trade):
-            r = row(t)
-            r.pop("analysis", None)
-            add("t%d" % t.id, "trade", "%s %s %s #%d" % (t.direction, t.symbol, t.status, t.id), r)
-            if t.version_id:
-                link("t%d" % t.id, "v%d" % t.version_id, "followed")
-            if t.condition_id:
-                link("t%d" % t.id, "c%d" % t.condition_id, "entered in")
-            for did in t.detection_ids or []:
-                pats.add(did)
-                link("t%d" % t.id, "d:" + did, "based on")
-        for d in s.query(Detection).filter(Detection.id.in_(pats)) if pats else []:
-            add("d:" + d.id, "pattern", "%s %s" % (d.data.get("label"), d.data.get("dir") or ""), d.data)
-        for ls in s.query(Lesson):
-            add("l%d" % ls.id, "lesson", ls.code.replace("_", " "), row(ls))
-            for attr, pre in (("trade_id", "t"), ("backtest_id", "b"), ("experiment_id", "x"), ("version_id", "v")):
-                if getattr(ls, attr):
-                    link("l%d" % ls.id, "%s%d" % (pre, getattr(ls, attr)), "learned from" if pre != "v" else "about")
-        for e in exps.values():
-            for lid in e.lesson_ids or []:
-                link("x%d" % e.id, "l%d" % lid, "motivated by")
-    ids = {n["id"] for n in nodes}
-    return {"nodes": nodes, "links": [l for l in links if l["source"] in ids and l["target"] in ids]}

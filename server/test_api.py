@@ -74,10 +74,11 @@ def test_backtest_research_and_brain(c):
         e = c.post("/api/research/experiments/%d/evaluate" % exps[0]["id"]).json()
         assert e["status"] in ("accepted", "rejected") and e["verdict"]["reasons"]
         assert c.post("/api/research/experiments/%d/evaluate" % e["id"]).status_code == 400
-    g = c.get("/api/brain").json()
+    g = c.get("/api/brain/graph").json()
     ids = {n["id"] for n in g["nodes"]}
-    assert all(l["source"] in ids and l["target"] in ids for l in g["links"])
-    assert {"strategy", "version", "backtest", "trade"} <= {n["type"] for n in g["nodes"]}
+    assert all(e["src"] in ids and e["dst"] in ids for e in g["edges"])
+    assert {"pattern", "strategy", "research"} <= {n["category"] for n in g["nodes"]}  # engine rules, strategies, their backtests
+    assert g["stats"]["patterns"] >= 12 and g["stats"]["strategies"] == 2
     assert c.post("/api/versions/%d/adopt" % v["id"]).status_code == 400  # active, not a validated candidate
 
 

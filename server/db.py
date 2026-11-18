@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import time
 
-from sqlalchemy import JSON, Column, Float, ForeignKey, Integer, String, Text, create_engine
+from sqlalchemy import JSON, Boolean, Column, Float, ForeignKey, Integer, String, Text, create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 _DIR = os.environ.get("VT_DATA_DIR") or os.path.dirname(os.path.abspath(__file__))  # the desktop app sets VT_DATA_DIR to AppData
@@ -155,6 +155,93 @@ class Experiment(Base):
     status = Column(String, default="proposed")  # proposed | accepted | rejected
     verdict = Column(JSON, nullable=True)
     created_at = Column(Float, default=now)
+
+
+# ---------------------------------------------------------------- AI Brain knowledge graph
+
+class KnowledgeNode(Base):
+    __tablename__ = "knowledge_nodes"
+    id = Column(Integer, primary_key=True)
+    title = Column(String, index=True)
+    category = Column(String, index=True)  # strategy | pattern | skill | condition | source | research
+    summary = Column(Text, default="")
+    detail = Column(Text, default="")
+    rules = Column(JSON, nullable=True)  # strategies only: entry/exit/stop/target/filters as stated by the source
+    verification = Column(String, default="imported")  # imported | corroborated | disputed | built-in rule | tested
+    origin = Column(String, nullable=True, index=True)  # set for records synced from the app itself (engine, strategy, backtest, source)
+    created_at = Column(Float, default=now)
+    updated_at = Column(Float, default=now)
+
+
+class KnowledgeEdge(Base):
+    __tablename__ = "knowledge_edges"
+    id = Column(Integer, primary_key=True)
+    src_id = Column(Integer, ForeignKey("knowledge_nodes.id"), index=True)
+    dst_id = Column(Integer, ForeignKey("knowledge_nodes.id"), index=True)
+    rel = Column(String)  # RELATED_TO | USED_BY | EXPLAINED_BY | PART_OF | REQUIRES | SUPPORTS | CONTRADICTS | TESTED_BY | DERIVED_FROM
+    explanation = Column(Text)
+    source_id = Column(Integer, ForeignKey("knowledge_sources.id"), nullable=True)
+    created_at = Column(Float, default=now)
+
+
+class KnowledgeSource(Base):
+    __tablename__ = "knowledge_sources"
+    id = Column(Integer, primary_key=True)
+    url = Column(String, index=True)
+    platform = Column(String)  # youtube | tiktok | article | website
+    title = Column(String)
+    author = Column(String, nullable=True)
+    published = Column(String, nullable=True)
+    status = Column(String, default="processing")  # processing | complete | incomplete | failed
+    complete = Column(Boolean, default=False)  # True only when the full content (article text / transcript) was analysed
+    note = Column(Text, nullable=True)
+    content_chars = Column(Integer, default=0)
+    content_hash = Column(String, nullable=True)
+    main_topic = Column(Text, nullable=True)
+    claims = Column(JSON, nullable=True)  # claims the source makes that need independent verification
+    imported_at = Column(Float, default=now)
+
+
+class SourceKnowledgeLink(Base):
+    __tablename__ = "source_knowledge_links"
+    id = Column(Integer, primary_key=True)
+    source_id = Column(Integer, ForeignKey("knowledge_sources.id"), index=True)
+    node_id = Column(Integer, ForeignKey("knowledge_nodes.id"), index=True)
+    excerpt = Column(Text, nullable=True)
+    timestamp_ref = Column(String, nullable=True)
+    created_at = Column(Float, default=now)
+
+
+class ImportJob(Base):
+    __tablename__ = "import_jobs"
+    id = Column(Integer, primary_key=True)
+    source_id = Column(Integer, ForeignKey("knowledge_sources.id"), nullable=True)
+    url = Column(String)
+    status = Column(String, default="running")  # running | done | incomplete | failed
+    stage = Column(String, default="")
+    steps = Column(JSON)
+    error = Column(Text, nullable=True)
+    result = Column(JSON, nullable=True)
+    started_at = Column(Float, default=now)
+    completed_at = Column(Float, nullable=True)
+
+
+class KnowledgeRevision(Base):
+    __tablename__ = "knowledge_revisions"
+    id = Column(Integer, primary_key=True)
+    node_id = Column(Integer, ForeignKey("knowledge_nodes.id"), index=True)
+    previous = Column(Text, nullable=True)
+    updated = Column(Text, nullable=True)
+    reason = Column(Text)
+    source_id = Column(Integer, ForeignKey("knowledge_sources.id"), nullable=True)
+    created_at = Column(Float, default=now)
+
+
+class BrainLayout(Base):
+    __tablename__ = "brain_layout"
+    key = Column(String, primary_key=True)  # "ai", "cat:pattern", "n:12"
+    x = Column(Float)
+    y = Column(Float)
 
 
 def init():

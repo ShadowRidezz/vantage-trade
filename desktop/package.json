@@ -1,7 +1,7 @@
 {
   "name": "vantage-trade",
   "productName": "VANTAGE TRADE",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "AI-powered trading research platform: charts, AI analysis, backtesting, paper-trading journal and replay.",
   "main": "main.js",
   "private": true,

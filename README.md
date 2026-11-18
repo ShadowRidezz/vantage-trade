@@ -21,7 +21,11 @@ Everything else, including pattern detection and backtests, works without it.
 - **Backtesting** – chronological simulation with futures tick values, commissions and slippage; strategy versions.
 - **Journal & Replay** – simulated trades, rule-based trade reviews, candle-by-candle replay without future data.
 - **Research** – recurring issues become hypotheses that are kept only if they win on unseen (out-of-sample) data.
-- **AI Brain** – 3D / 2D graph of stored strategies, trades, patterns, backtests and lessons.
+- **AI Brain** – a persistent knowledge graph. Paste a YouTube, TikTok, article or website link and the AI extracts the
+  patterns, strategies, skills and market conditions it explains, links them to what it already knows (no duplicates,
+  disagreements kept), and cites the source with verbatim quotes and timestamps. Videos need a pasted transcript for full
+  analysis. Imported claims are never treated as verified; strategies count as tested only after a backtest here.
+  The AI Analyst uses this knowledge when explaining the chart.
 
 Market data: Yahoo Finance, delayed. Futures are continuous front-month series.
 
