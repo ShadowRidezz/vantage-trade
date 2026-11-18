@@ -1,0 +1,29 @@
+{
+  "name": "vantage-trade",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "typecheck": "tsc -b"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "5.108.0",
+    "lightweight-charts": "^5.0.8",
+    "lucide-react": "0.468.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-force-graph-2d": "1.29.2",
+    "react-force-graph-3d": "1.29.2",
+    "zustand": "5.0.2"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.1.11",
+    "@types/react": "18.3.12",
+    "@types/react-dom": "18.3.1",
+    "@vitejs/plugin-react": "4.3.4",
+    "tailwindcss": "4.1.11",
+    "typescript": "5.7.2",
+    "vite": "6.0.7"
+  }
+}

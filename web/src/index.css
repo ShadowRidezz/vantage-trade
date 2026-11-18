@@ -1,0 +1,26 @@
+@import "tailwindcss";
+
+/* Design tokens. Every component reads these; never hardcode colors. */
+:root, [data-theme="dark"] {
+  --bg: #090B10; --sidebar: #0D1017; --panel: #121722; --elevated: #19202D;
+  --text: #F2F4F8; --text-2: #9AA4B5; --border: #252D3B;
+  --accent: #8B5CF6; --bull: #22C55E; --bear: #EF4444; --warn: #EAB308; --info: #3B82F6; --cyan: #06B6D4;
+  color-scheme: dark;
+}
+[data-theme="light"] {
+  --bg: #F5F7FB; --sidebar: #FFFFFF; --panel: #FFFFFF; --elevated: #EDF1F7;
+  --text: #111827; --text-2: #64748B; --border: #DDE3EC;
+  --accent: #7C3AED; --bull: #16A34A; --bear: #DC2626; --warn: #A16207; --info: #2563EB; --cyan: #0891B2;
+  color-scheme: light;
+}
+
+@theme inline {
+  --color-bg: var(--bg); --color-sidebar: var(--sidebar); --color-panel: var(--panel);
+  --color-elevated: var(--elevated); --color-text: var(--text); --color-text-2: var(--text-2);
+  --color-line: var(--border); --color-accent: var(--accent); --color-bull: var(--bull); --color-bear: var(--bear); --color-warn: var(--warn); --color-info: var(--info); --color-cyan: var(--cyan);
+  --font-sans: Inter, system-ui, sans-serif; --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+html, body, #root { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.4 var(--font-sans); -webkit-font-smoothing: antialiased; }
+:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }

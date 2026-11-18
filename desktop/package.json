@@ -1,0 +1,31 @@
+{
+  "name": "vantage-trade",
+  "productName": "VANTAGE TRADE",
+  "version": "1.0.0",
+  "description": "AI-powered trading research platform: charts, AI analysis, backtesting, paper-trading journal and replay.",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis --publish never"
+  },
+  "devDependencies": {
+    "electron": "^44.7.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.shadowridezz.vantagetrade",
+    "publish": null,
+    "productName": "VANTAGE TRADE",
+    "artifactName": "VANTAGE-TRADE-Setup-${version}.${ext}",
+    "directories": { "output": "dist" },
+    "files": ["main.js", "build/icon.ico", "package.json"],
+    "extraResources": [
+      { "from": "backend-build/vantage-backend", "to": "backend" },
+      { "from": "../web/dist", "to": "web" },
+      { "from": "build/icon.ico", "to": "build/icon.ico" }
+    ],
+    "win": { "target": "nsis", "icon": "build/icon.ico" },
+    "nsis": { "oneClick": false, "perMachine": false, "allowToChangeInstallationDirectory": true, "createDesktopShortcut": true, "shortcutName": "VANTAGE TRADE" }
+  }
+}
