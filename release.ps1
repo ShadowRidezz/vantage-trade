@@ -7,13 +7,11 @@ $ver = (Get-Content desktop\package.json -Raw | ConvertFrom-Json).version
 $H = @{ Authorization = "Bearer $token"; "User-Agent" = "vantage-trade-release" }
 $api = "https://api.github.com/repos/ShadowRidezz/vantage-trade"
 
-npm --prefix web run build; if ($LASTEXITCODE) { throw "Web build failed" }
-Push-Location server
-.venv\Scripts\python -m PyInstaller --noconfirm --clean --onedir --name vantage-backend --distpath ..\desktop\backend-build `
-  --workpath "$env:TEMP\vt-pyi" --specpath "$env:TEMP\vt-pyi" --collect-submodules uvicorn --hidden-import websockets.legacy.server run_server.py
+# Build tools log to stderr; run them through cmd so PowerShell judges them by exit code only.
+cmd /c "npm --prefix web run build 2>&1"; if ($LASTEXITCODE) { throw "Web build failed" }
+cmd /c "cd server && .venv\Scripts\python -m PyInstaller --noconfirm --clean --onedir --name vantage-backend --distpath ..\desktop\backend-build --workpath ""%TEMP%\vt-pyi"" --specpath ""%TEMP%\vt-pyi"" --collect-submodules uvicorn --hidden-import websockets.legacy.server run_server.py 2>&1"
 if ($LASTEXITCODE) { throw "Backend build failed" }
-Pop-Location
-npm --prefix desktop run dist; if ($LASTEXITCODE) { throw "Installer build failed" }
+cmd /c "npm --prefix desktop run dist 2>&1"; if ($LASTEXITCODE) { throw "Installer build failed" }
 
 $exe = "desktop\dist\VANTAGE-TRADE-Setup-$ver.exe"
 try { $rel = Invoke-RestMethod "$api/releases/tags/v$ver" -Headers $H } catch { $rel = $null }
