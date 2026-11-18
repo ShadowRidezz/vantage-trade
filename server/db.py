@@ -116,7 +116,20 @@ class Trade(Base):
     detection_ids = Column(JSON)
     price_source = Column(String)
     notes = Column(Text, default="")
+    source = Column(String, nullable=True)  # None/"user" = placed by you, "ai" = placed by the live AI trader
     created_at = Column(Float, default=now)
+
+
+class AiTrader(Base):
+    """The live AI paper trader (one row): which market it trades and since when."""
+    __tablename__ = "ai_trader"
+    id = Column(Integer, primary_key=True)
+    enabled = Column(Boolean, default=True)
+    symbol = Column(String, default="MNQ")
+    tf = Column(String, default="5m")
+    started_at = Column(Float, default=now)  # trades only come from candles after this moment
+    last_run = Column(Float, nullable=True)
+    last_error = Column(Text, nullable=True)
 
 
 class Review(Base):
@@ -300,7 +313,7 @@ class BrainLayout(Base):
 
 # Columns added after a table first shipped. create_all() only creates missing tables, so add these by hand.
 # shortcut: hand-written ALTERs, not Alembic; switch to Alembic migrations once schema changes become frequent.
-ADDED_COLUMNS = {"knowledge_sources": [("content_kind", "VARCHAR")]}
+ADDED_COLUMNS = {"knowledge_sources": [("content_kind", "VARCHAR")], "trades": [("source", "VARCHAR")]}
 
 
 def init():

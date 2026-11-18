@@ -45,7 +45,7 @@ export type StrategyRow = { id: number; key: string; name: string; description: 
 export type Trade = {
   id: number; symbol: string; contract: string; tf: string; direction: 'long' | 'short'; qty: number; entry_time: number; entry_price: number
   stop: number; target: number; exit_time: number | null; exit_price: number | null; exit_reason: string | null; status: 'open' | 'closed'
-  pnl: number | null; version_id: number | null; notes: string; price_source: string; created_at: number
+  pnl: number | null; version_id: number | null; notes: string; price_source: string; created_at: number; source?: string | null
   analysis?: { summary: Summary; steps: Step[]; detections: Detection[]; last_closed: number }
 }
 export type Lesson = { id: number; source: string; code: string; text: string; evidence: any; created_at: number }

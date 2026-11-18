@@ -10,7 +10,7 @@ import { Badge, Btn, Empty, ErrorText, Metric, Panel, Simulated, cx, dirTone, in
 type Detail = { trade: Trade; review: { facts: any; narrative: string | null; created_at: number } | null; lessons: Lesson[] }
 
 export function Journal() {
-  const [q, setQ] = useState(''), [status, setStatus] = useState(''), [sym, setSym] = useState('')
+  const [q, setQ] = useState(''), [status, setStatus] = useState(''), [sym, setSym] = useState(''), [by, setBy] = useState('')
   const [sel, setSel] = useState<number | null>(null), [replay, setReplay] = useState<number | null>(null)
   const trades = useQuery({ queryKey: ['trades', 'list', q, status, sym], queryFn: () => api<Trade[]>(`/api/trades?q=${encodeURIComponent(q)}&status=${status}&symbol=${sym}`), refetchInterval: 30_000 })
   const all = useQuery({ queryKey: ['trades', 'all'], queryFn: () => api<Trade[]>('/api/trades'), refetchInterval: 30_000 })
@@ -31,18 +31,19 @@ export function Journal() {
         <Panel title={<span className="flex items-center gap-2">Paper-trading journal <Simulated /></span>} bodyClass="flex min-h-0 flex-col"
           right={<div className="flex items-center gap-2">
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search trades" aria-label="Search trades" className={cx(inputCls, 'w-40')} />
+            <select value={by} onChange={(e) => setBy(e.target.value)} aria-label="Placed by" className={inputCls}><option value="">You + AI</option><option value="user">Placed by you</option><option value="ai">Placed by the AI</option></select>
             <select value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Status filter" className={inputCls}><option value="">All</option><option value="open">Open</option><option value="closed">Closed</option></select>
             <select value={sym} onChange={(e) => setSym(e.target.value)} aria-label="Market filter" className={inputCls}><option value="">All markets</option>
               {[...new Set((all.data ?? []).map((t) => t.symbol))].map((s) => <option key={s}>{s}</option>)}</select>
           </div>}>
           <div className="min-h-0 flex-1 overflow-auto">
             <ErrorText error={trades.error} />
-            {trades.data && !trades.data.length ? <Empty>{all.data?.length ? 'No trades match the filters.' : 'No simulated trades yet. Open one from the chart toolbar with “Paper trade”.'}</Empty> :
+            {trades.data && !trades.data.length ? <Empty>{all.data?.length ? 'No trades match the filters.' : 'No simulated trades yet. Open one from the chart toolbar with “Paper trade”, or let the AI trade live on the AI Analyst page.'}</Empty> :
               <table className="w-full text-[12px]">
                 <thead className="sticky top-0 bg-panel text-left text-[11px] text-text-2"><tr className="border-b border-line">
                   {['#', 'Date', 'Market', 'Contract', 'Side', 'Size', 'Entry', 'Exit', 'Stop', 'Target', 'P&L', 'Strategy', 'Status'].map((h) => <th key={h} className="whitespace-nowrap px-2 py-1.5 font-medium">{h}</th>)}</tr></thead>
-                <tbody>{trades.data?.map((t) => <tr key={t.id} onClick={() => setSel(t.id)} className={cx('cursor-pointer border-b border-line/50', sel === t.id ? 'bg-accent/10' : 'hover:bg-elevated/60')}>
-                  <td className="px-2 py-1.5 text-text-2">{t.id}</td><td className="whitespace-nowrap px-2">{fmtT(t.entry_time)}</td><td className="px-2 font-semibold">{t.symbol} <span className="font-normal text-text-2">{t.tf}</span></td>
+                <tbody>{trades.data?.filter((t) => !by || (by === 'ai') === (t.source === 'ai')).map((t) => <tr key={t.id} onClick={() => setSel(t.id)} className={cx('cursor-pointer border-b border-line/50', sel === t.id ? 'bg-accent/10' : 'hover:bg-elevated/60')}>
+                  <td className="px-2 py-1.5 text-text-2">{t.id}{t.source === 'ai' && <span className="ml-1"><Badge tone="accent">AI</Badge></span>}</td><td className="whitespace-nowrap px-2">{fmtT(t.entry_time)}</td><td className="px-2 font-semibold">{t.symbol} <span className="font-normal text-text-2">{t.tf}</span></td>
                   <td className="px-2 font-mono text-[11px]">{t.contract.split(' ')[0]}</td><td className="px-2"><Badge tone={dirTone(t.direction)}>{t.direction}</Badge></td><td className="px-2">{t.qty}</td>
                   <td className="px-2 font-mono">{fmtP(t.entry_price)}</td><td className="px-2 font-mono">{fmtP(t.exit_price)}</td><td className="px-2 font-mono">{fmtP(t.stop)}</td><td className="px-2 font-mono">{fmtP(t.target)}</td>
                   <td className={cx('px-2 font-mono', (t.pnl ?? 0) >= 0 ? 'text-bull' : 'text-bear')}>{fmtUsd(t.pnl)}</td><td className="whitespace-nowrap px-2 text-text-2">{vname(t.version_id)}</td>

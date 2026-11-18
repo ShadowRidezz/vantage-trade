@@ -298,7 +298,8 @@ def snapshot(res, bars, price):
 
 def update_open_trades():
     with db.session() as s:
-        open_ = s.query(Trade).filter_by(status="open").all()
+        # AI trades are closed by the AI trader on its own candles; only your trades are checked here
+        open_ = [t for t in s.query(Trade).filter_by(status="open") if t.source != "ai"]
         for sym in {t.symbol for t in open_}:
             try:
                 bars = M.get_bars(sym, "1m")

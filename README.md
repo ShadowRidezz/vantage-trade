@@ -17,7 +17,10 @@ Everything else, including pattern detection and backtests, works without it.
 
 - **Charts** – candlesticks, 10 timeframes, drawing tools, SMA / EMA / VWAP / RSI / MACD, light and dark themes.
 - **AI Vision** – live detection of Fair Value Gaps, order blocks, liquidity, sweeps, BOS / CHoCH / MSS, support and resistance, with the reason for every marking.
-- **AI Analyst** – market scanner, a chart of where the AI's strategies buy and sell, and a plain-English chat about the chart.
+- **AI Analyst** – the AI paper-trades live (while the app is open) on delayed candles with its active strategies. Each trade is
+  drawn like TradingView's position tool (green profit zone, red risk zone), and the AI Trade Tracker shows the share of trades
+  right, P&L, profit factor, average R, drawdown, streak, the open trade and recent results. Every AI trade also lands in the
+  Journal, marked AI. Live trades use the same chronological simulator as backtests and are tested to match them exactly.
 - **Backtesting** – chronological simulation with futures tick values, commissions and slippage; strategy versions.
 - **Journal & Replay** – simulated trades, rule-based trade reviews, candle-by-candle replay without future data.
 - **Research** – recurring issues become hypotheses that are kept only if they win on unseen (out-of-sample) data.

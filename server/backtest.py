@@ -69,7 +69,9 @@ def signals(bars, an, key, params, tick):
     return out
 
 
-def simulate(bars, sigs, params, spec, settings, start, end):
+def simulate(bars, sigs, params, spec, settings, start, end, live=None):
+    """Backtest semantics. With `live` (a dict), a position still open at the last candle is reported in live["open"]
+    instead of being closed at "end of data", and orders still waiting to fill go to live["pending"]."""
     tick, tv = spec["tick_size"], spec["tick_value"]
     qty, comm = int(settings.get("qty", 1)), float(settings.get("commission", spec.get("commission", 0)))
     slip = float(settings.get("slippage_ticks", 1)) * tick
@@ -118,7 +120,7 @@ def simulate(bars, sigs, params, spec, settings, start, end):
             exit_px, reason = pos["target"], "target"
         elif i - pos["entry_idx"] >= params["max_hold"]:
             exit_px, reason = b["close"] - d * slip, "time"
-        elif i == end - 1:
+        elif i == end - 1 and live is None:
             exit_px, reason = b["close"] - d * slip, "end of data"
         if not hit_stop and not (fill_bar and pos["limit"]):  # unknown intrabar order: don't credit favourable moves
             pos["mfe"] = max(pos["mfe"], fav)
@@ -139,6 +141,19 @@ def simulate(bars, sigs, params, spec, settings, start, end):
                        "trend": s["trend"], "det_id": s["det_id"], "reason": s["reason"],
                        "planned_rr": params["rr"]})
         pos = None
+    if live is not None:
+        live["open"] = None
+        if pos is not None:
+            s, d = pos["sig"], pos["dir"]
+            live["open"] = {"entry_time": bars[pos["entry_idx"]]["time"], "dir": "long" if d == 1 else "short", "entry": round(pos["entry"], 6),
+                            "stop": round(pos["stop"], 6), "orig_stop": round(s["stop"], 6), "target": round(pos["target"], 6), "risk": pos["risk"],
+                            "qty": qty, "breakeven": pos["be"], "det_id": s["det_id"], "reason": s["reason"], "bars_held": end - 1 - pos["entry_idx"]}
+        while k < len(sigs) and sigs[k]["avail"] <= end:  # signals confirmed on the last candle act from the next one
+            if sigs[k]["avail"] >= start:
+                pending.append(dict(sigs[k]))
+            k += 1
+        live["pending"] = [{"dir": "long" if s["dir"] == 1 else "short", "type": s["type"], "price": s.get("price"), "stop": s["stop"],
+                            "reason": s["reason"], "det_id": s["det_id"]} for s in pending if s["expires"] >= end and not s.get("used")]
     return trades
 
 

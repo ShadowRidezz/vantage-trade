@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import mimetypes
+import threading
 import os
 import re
 import uuid
@@ -18,6 +19,7 @@ import db
 import llm
 import market as M
 import services as S
+import ai_trader as AT
 import brain as B
 import brain_video as BV
 import video as V
@@ -30,6 +32,8 @@ TF = "^(%s)$" % "|".join(M.TIMEFRAMES)
 @app.on_event("startup")
 def _startup():
     S.seed()
+    if not os.environ.get("VT_NO_TRADER"):  # tests drive the trader directly
+        AT.start_background()
 
 
 def _call(fn, *a):
@@ -117,6 +121,24 @@ async def vision(ws: WebSocket, symbol: str, tf: str):
             await asyncio.sleep(20)
     except WebSocketDisconnect:
         return
+
+
+class TraderReq(BaseModel):
+    symbol: Optional[str] = Field(None, pattern=SYM)
+    tf: Optional[str] = Field(None, pattern=TF)
+    enabled: Optional[bool] = None
+
+
+@app.get("/api/ai-trader")
+def ai_trader_view():
+    return _call(AT.view)
+
+
+@app.put("/api/ai-trader")
+def ai_trader_set(r: TraderReq):
+    c = AT.configure(r.symbol.upper() if r.symbol else None, r.tf, r.enabled)
+    threading.Thread(target=AT.step, daemon=True).start()  # don't wait 20 s for the first check on the new market
+    return c
 
 
 @app.get("/api/ai-trades")
