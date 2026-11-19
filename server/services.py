@@ -33,8 +33,14 @@ def seed():
             row_ = Strategy(key=key, name=st["name"], description=st["description"])
             s.add(row_)
             s.flush()
-            s.add(StrategyVersion(strategy_id=row_.id, version=1, params=st["params"], status="active", note="Initial rules"))
+            pattern = key not in B.V1_PARAMS  # candle patterns and the rest are traded only once the AI Lab approves them
+            s.add(StrategyVersion(strategy_id=row_.id, version=1, params=st["params"], status="candidate" if pattern else "active",
+                                  note="Starting rules; the AI Lab tests and tunes these" if pattern else "Initial rules"))
         s.commit()
+        t = s.get(db.AiTrader, 1)
+        if t and t.record_since is None:  # the AI Lab era starts the tracker's record; older AI trades stay, shown apart
+            t.record_since = time.time()
+            s.commit()
         # Installs still on the first rules get the stricter ones as a new version; a version you adopted is left alone.
         upgraded = False
         for st, v in active_versions(s):

@@ -19,6 +19,9 @@ type View = {
     avg_r: number | null; max_drawdown: number; streak: { kind: string; count: number } | null; today: number
     earlier: { wins: number; losses: number } | null }
   status: { running: boolean; last_run: number | null; last_error: string | null; interval: number }
+  lab: { state: { running: boolean; step: string }; tested: number
+    run: { id: number; created_at: number; approved: { name: string; version: number; newer: { trades: number; win_rate: number; avg_r: number } }[] } | null
+    elsewhere: { symbol: string; tf: string; approved: { name: string }[] }[] }
 }
 
 const MARKETS = ['MNQ', 'MES', 'NQ', 'ES']
@@ -51,7 +54,7 @@ export function Analyst() {
       <ErrorText error={q.error || set.error} />
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_370px]">
         <LiveChart v={v} />
-        <Tracker v={v} />
+        <Tracker v={v} onSwitch={(m) => set.mutate(m)} />
       </div>
     </div>
   )
@@ -173,7 +176,7 @@ function Positions({ chart, series, v }: { chart: IChartApi; series: ISeriesApi<
 
 // ---------------------------------------------------------------- tracker (right side)
 
-function Tracker({ v }: { v?: View }) {
+function Tracker({ v, onSwitch }: { v?: View; onSwitch: (m: { symbol: string; tf: string }) => void }) {
   const s = v?.stats
   const closed = useMemo(() => (v?.trades ?? []).filter((t) => t.status === 'closed').sort((a, b) => b.exit_time! - a.exit_time!), [v])
   const open = (v?.trades ?? []).filter((t) => t.status === 'open')
@@ -209,9 +212,20 @@ function Tracker({ v }: { v?: View }) {
         {tile('Streak', s.streak ? `${s.streak.count} ${s.streak.kind === 'win' ? (s.streak.count > 1 ? 'wins' : 'win') : s.streak.count > 1 ? 'losses' : 'loss'}` : '—', s.streak?.kind === 'win' ? 'bull' : s.streak ? 'bear' : undefined)}
         {tile('Trades today', String(s.today))}
       </div>}
+      {v && <section><h3 className="mb-1.5 text-[12px] font-semibold text-text-2">Strategies it may trade here</h3>
+        {v.lab.run?.approved.length ? <ul className="flex flex-col gap-1">{v.lab.run.approved.map((a) => <li key={a.name} className="flex justify-between gap-2 rounded-md bg-elevated px-2.5 py-1.5 text-[12px]">
+          <span className="font-medium">{a.name}</span><span className="font-mono text-[11px] text-bull">{signed(a.newer.avg_r, 2)}R · {Math.round(a.newer.win_rate)}% win on unseen data</span></li>)}</ul>
+          : <div className="rounded-lg border border-dashed border-line px-3 py-2 text-[12px] text-text-2">
+            {v.lab.state.running && !v.lab.run ? 'The AI Lab is testing every strategy on this market…'
+              : v.lab.run ? `No strategy passed the AI Lab on ${v.config.symbol} ${v.config.tf}, so the AI is not taking trades here.` : 'Waiting for the AI Lab.'}
+            {v.lab.run && v.lab.elsewhere.slice(0, 3).map((o) => <button key={o.symbol + o.tf} onClick={() => onSwitch({ symbol: o.symbol, tf: o.tf })}
+              className="mt-1.5 block w-full rounded-md border border-line px-2 py-1 text-left text-text hover:bg-elevated">Trade {o.symbol} {o.tf} instead ({o.approved.length} approved)</button>)}
+          </div>}
+        {v.lab.run && <p className="mt-1 text-[11px] text-text-2">Tested {v.lab.tested} strategies {fmtT(v.lab.run.created_at)} · re-tested every 3 hours · details in Backtesting › AI Lab</p>}
+      </section>}
       <section><h3 className="mb-1.5 text-[12px] font-semibold text-text-2">Open trade{open.length > 1 ? 's' : ''}</h3>
         {!open.length && <p className="rounded-lg border border-dashed border-line px-3 py-2 text-[12px] text-text-2">
-          {v?.config.enabled ? (v.pending.length ? `Setup armed: waiting for price to reach ${fmtP(v.pending[0].entry)}.` : 'No open trade. Waiting for the next setup.') : 'The AI is paused.'}</p>}
+          {v?.config.enabled ? (v.pending.length ? `Setup armed: waiting for price to reach ${fmtP(v.pending[0].entry)}.` : v.lab.run?.approved.length ? 'No open trade. Waiting for an approved setup.' : 'No open trade.') : 'The AI is paused.'}</p>}
         {open.map((t) => <div key={t.id} className={cx('mb-1.5 rounded-lg border px-3 py-2', (t.now_r ?? 0) >= 0 ? 'border-bull/50 bg-bull/8' : 'border-bear/50 bg-bear/8')}>
           <div className="text-[14px] font-semibold">{t.direction.toUpperCase()} {t.qty} {v!.config.symbol} @ {fmtP(t.entry_price)}</div>
           <div className="text-[12px] text-text-2">Stop {fmtP(t.stop)} · Target {fmtP(t.target)} · now <span className={(t.now_r ?? 0) >= 0 ? 'text-bull' : 'text-bear'}>{signed(t.now_r ?? 0)}R ({fmtUsd(t.unrealized ?? 0)})</span></div>

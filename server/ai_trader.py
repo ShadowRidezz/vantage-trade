@@ -12,6 +12,7 @@ import time
 
 import backtest as B
 import db
+import lab
 import market as M
 import services as S
 from db import AiTrader, Trade
@@ -25,7 +26,7 @@ def config():
     with db.session() as s:
         c = s.get(AiTrader, 1)
         if c is None:
-            c = AiTrader(id=1, enabled=True, symbol="MNQ", tf="5m", started_at=time.time())
+            c = AiTrader(id=1, enabled=True, symbol="MNQ", tf="5m", started_at=time.time(), record_since=time.time())
             s.add(c)
             s.commit()
         return db.row(c)
@@ -79,20 +80,37 @@ def step():
     sym, tf = c["symbol"], c["tf"]
     spec = M.spec_for(sym)
     settings = {"capital": 10000, "commission": spec["commission"], "slippage_ticks": 1, "qty": 1}
+    run = lab.latest(sym, tf)
+    if run is None or time.time() - run["created_at"] > lab.MAX_AGE:
+        lab.start([(sym, tf)])  # background; until it finishes the trader keeps the previous approvals (or waits)
+    approved = (run or {}).get("approved") or []
     with _lock, db.session() as s:
         res, bars = S.analyze(sym, tf)
         if len(bars) < 30:
             return
-        for st, v in S.active_versions(s):
+        # (version id, trade from, only manage until) - only strategies the AI Lab approved for this market may open trades;
+        # an unfinished trade of one that lost its approval is still managed until it closes
+        todo = [(a["version_id"], a["approved_since"], None) for a in approved]
+        ids = {a["version_id"] for a in approved}
+        for row in s.query(Trade).filter_by(source="ai", symbol=sym, tf=tf, status="open"):
+            if row.version_id not in ids:
+                todo.append((row.version_id, 0, row.entry_time))
+        cache = {}
+        for vid, since_v, until in todo:
+            v = s.get(db.StrategyVersion, vid)
+            st = s.get(db.Strategy, v.strategy_id)
             params = dict(v.params)
             an = res if B.analysis_cfg(params) == {"swing_k": 3, "fvg_min_atr": 0.1} else S.analyze(sym, tf, B.analysis_cfg(params), persist=False)[0]
             last_exit = max([t.exit_time for t in s.query(Trade).filter_by(source="ai", symbol=sym, tf=tf, version_id=v.id, status="closed")] or [0])
-            since = max(c["started_at"], last_exit)
+            since = max(c["started_at"], since_v, last_exit)
             start = next((i for i, b in enumerate(bars) if b["time"] > since), len(bars))
             if start >= len(bars):
                 continue
             live = {}
-            trades = B.simulate(bars, B.signals(bars, an, st.key, params, spec["tick_size"]), params, spec, settings, start, len(bars), live=live)
+            sigs = B.signals(bars, an, st.key, params, spec["tick_size"], cache)
+            if until is not None:
+                sigs = [g for g in sigs if g["avail"] < len(bars) and bars[g["avail"]]["time"] <= until]
+            trades = B.simulate(bars, sigs, params, spec, settings, start, len(bars), live=live)
             keep = set()
             for t in trades:
                 keep.add(_store(s, sym, tf, v.id, t, "closed", spec, an).entry_time)
@@ -104,6 +122,16 @@ def step():
         cfg = s.get(AiTrader, 1)
         cfg.last_run, cfg.last_error = time.time(), None
         s.commit()
+
+
+def status():
+    """Small, for the always-visible indicator."""
+    c = config()
+    run = lab.latest(c["symbol"], c["tf"])
+    fresh = c["last_run"] is not None and time.time() - c["last_run"] < 3 * INTERVAL + 30
+    return {"enabled": c["enabled"], "symbol": c["symbol"], "tf": c["tf"], "last_run": c["last_run"], "error": c["last_error"],
+            "scanning": bool(c["enabled"] and fresh and not c["last_error"]), "lab_running": lab.state()["running"],
+            "approved": [a["name"] for a in (run or {}).get("approved") or []], "lab_done": run is not None}
 
 
 def run_forever(stop_event=None):
@@ -162,16 +190,14 @@ def view():
     closed = M.closed_bars(all_bars, tf)
     with db.session() as s:
         rows = s.query(Trade).filter_by(source="ai", symbol=sym, tf=tf).order_by(Trade.entry_time).all()
-        names = {v.id: "%s v%d" % (st.name, v.version) for st, v in S.active_versions(s)}
-        active = set(names)
-        for v in s.query(db.StrategyVersion):
-            names.setdefault(v.id, "%s v%d" % (s.get(db.Strategy, v.strategy_id).name, v.version))
-        trades = [dict(db.row(r), strategy=names.get(r.version_id, ""), current_rules=r.version_id in active) for r in rows]
+        names = {v.id: "%s v%d" % (s.get(db.Strategy, v.strategy_id).name, v.version) for v in s.query(db.StrategyVersion)}
+        since = c.get("record_since") or 0
+        trades = [dict(db.row(r), strategy=names.get(r.version_id, ""), current_rules=r.entry_time >= since) for r in rows]
         for t in trades:
             t.pop("analysis", None)
-        # the tracker scores the rules trading now; trades under older rules are counted separately
-        st = stats([r for r in rows if r.version_id in active])
-        old = [r for r in rows if r.version_id not in active and r.status == "closed"]
+        # the tracker scores trades since the AI Lab era began; earlier ones are counted separately
+        st = stats([r for r in rows if r.entry_time >= since])
+        old = [r for r in rows if r.entry_time < since and r.status == "closed"]
         st["earlier"] = {"wins": sum((r.pnl or 0) > 0 for r in old), "losses": sum((r.pnl or 0) <= 0 for r in old)} if old else None
     price = all_bars[-1]["close"]
     spec = M.spec_for(sym)
@@ -183,14 +209,20 @@ def view():
             t["unrealized"] = round((price - t["entry_price"]) * d / spec["tick_size"] * spec["tick_value"] * t["qty"], 2)
     pending = []
     try:
-        res, _ = S.analyze(sym, tf)
-        for x in S.strategy_checks(sym, tf, res, closed):
+        for a in (lab.latest(sym, tf) or {}).get("approved") or []:  # only setups the trader may actually take
+            p = a["params"]
+            an = S.analyze(sym, tf, B.analysis_cfg(p), persist=False)[0]
+            x = B.conditions_now(closed, an, a["key"], p, spec["tick_size"])
             if x.get("plan") and not x["plan"].get("touched"):
-                pending.append(dict(x["plan"], strategy="%s v%d" % (x["strategy"], x["version"])))
+                pending.append(dict(x["plan"], strategy="%s v%d" % (a["name"], a["version"])))
     except Exception:  # noqa: BLE001 - pending setups are optional decoration
         pass
     age = time.time() - all_bars[-1]["time"]
-    return {"config": c, "provider": M.provider_info(), "spec": {k: v for k, v in spec.items() if k != "yahoo"},
+    run = lab.latest(sym, tf)
+    lab_info = {"state": lab.state(), "run": {k: run[k] for k in ("id", "created_at", "approved", "seconds", "bars")} if run else None,
+                "tested": len(run["results"]) if run else 0,
+                "elsewhere": [o for o in lab.overview() if o["approved"] and (o["symbol"], o["tf"]) != (sym, tf)]}
+    return {"config": c, "provider": M.provider_info(), "lab": lab_info, "spec": {k: v for k, v in spec.items() if k != "yahoo"},
             "bars": all_bars[-300:], "last_closed": closed[-1]["time"] if closed else None, "price": price,
             "market_quiet": age > 3 * M.TIMEFRAMES[tf][3] + 600, "trades": trades, "stats": st, "pending": pending,
             "status": {"running": c["enabled"], "last_run": c["last_run"], "last_error": c["last_error"], "interval": INTERVAL}}

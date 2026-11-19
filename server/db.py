@@ -130,6 +130,7 @@ class AiTrader(Base):
     started_at = Column(Float, default=now)  # trades only come from candles after this moment
     last_run = Column(Float, nullable=True)
     last_error = Column(Text, nullable=True)
+    record_since = Column(Float, nullable=True)  # the tracker scores AI trades from here; earlier ones are shown apart
 
 
 class Review(Base):
@@ -304,6 +305,20 @@ class FrameRevision(Base):
     created_at = Column(Float, default=now)
 
 
+class LabRun(Base):
+    """One AI Lab run: every strategy tested on one market, best settings picked on older data, checked on newer data."""
+    __tablename__ = "lab_runs"
+    id = Column(Integer, primary_key=True)
+    symbol = Column(String, index=True)
+    tf = Column(String, index=True)
+    bars = Column(Integer)
+    split_time = Column(Float)
+    seconds = Column(Float)
+    results = Column(JSON)
+    approved = Column(JSON)  # [{key, version_id, params, approved_since, ...}]
+    created_at = Column(Float, default=now)
+
+
 class BrainLayout(Base):
     __tablename__ = "brain_layout"
     key = Column(String, primary_key=True)  # "ai", "cat:pattern", "n:12"
@@ -313,7 +328,8 @@ class BrainLayout(Base):
 
 # Columns added after a table first shipped. create_all() only creates missing tables, so add these by hand.
 # shortcut: hand-written ALTERs, not Alembic; switch to Alembic migrations once schema changes become frequent.
-ADDED_COLUMNS = {"knowledge_sources": [("content_kind", "VARCHAR")], "trades": [("source", "VARCHAR")]}
+ADDED_COLUMNS = {"knowledge_sources": [("content_kind", "VARCHAR")], "trades": [("source", "VARCHAR")],
+                 "ai_trader": [("record_since", "FLOAT")]}
 
 
 def init():

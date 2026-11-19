@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 import ai_trader as AT
 import backtest as B
 import db
+import lab
 import main
 import market as M
 import services as S
@@ -25,13 +26,24 @@ def _ai_rows(**kw):
         return [db.row(r) for r in s.query(db.Trade).filter_by(source="ai", **kw).order_by(db.Trade.entry_time)]
 
 
+def _approve(symbol, tf, since):
+    """Pretend the AI Lab approved the active versions (the trader only trades lab-approved strategies)."""
+    with db.session() as s:
+        appr = [{"key": st.key, "name": st.name, "version_id": v.id, "version": v.version, "params": dict(v.params),
+                 "newer": {"trades": 20, "win_rate": 50.0, "avg_r": 0.3}, "approved_since": since} for st, v in S.active_versions(s)]
+        s.add(db.LabRun(symbol=symbol, tf=tf, bars=0, split_time=0, seconds=0, results=[], approved=appr))
+        s.commit()
+
+
 def test_live_trades_match_a_backtest_of_the_same_period(c):
     AT.configure("MNQ", "5m", True)
     res, bars = S.analyze("MNQ", "5m")
     start_t = bars[len(bars) // 2]["time"]
+    _approve("MNQ", "5m", 0)
     with db.session() as s:
         s.query(db.Trade).filter_by(source="ai").delete()
         s.get(db.AiTrader, 1).started_at = start_t
+        s.get(db.AiTrader, 1).record_since = 0
         s.commit()
     AT.step()
     rows = _ai_rows(symbol="MNQ", tf="5m")
@@ -47,6 +59,21 @@ def test_live_trades_match_a_backtest_of_the_same_period(c):
         assert live == done, st.key
         opens = [r for r in rows if r["version_id"] == v.id and r["status"] == "open"]
         assert len(opens) <= 1
+
+
+def test_only_lab_approved_strategies_open_trades(c):
+    with db.session() as s:
+        s.add(db.LabRun(symbol="MNQ", tf="15m", bars=0, split_time=0, seconds=0, results=[], approved=[]))
+        s.commit()
+    AT.configure("MNQ", "15m", True)
+    with db.session() as s:
+        s.get(db.AiTrader, 1).started_at = 0
+        s.commit()
+    AT.step()
+    assert not _ai_rows(symbol="MNQ", tf="15m")  # nothing approved: no trades, however many setups appear
+    st = AT.status()
+    assert st["approved"] == [] and st["lab_done"] and st["scanning"]
+    AT.configure("MNQ", "5m", True)
 
 
 def test_closed_trades_are_final_and_steps_are_idempotent(c):

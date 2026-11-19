@@ -50,16 +50,40 @@ def test_slippage_and_gap_through_stop_skips():
 def test_backtest_has_no_lookahead():
     bars = walk(3000, seed=3)
     for key in B.STRATEGIES:
-        # first rules, and the current ones (1H trend, structure-break) with the session filter off for synthetic times
-        for base in (B.V1_PARAMS[key], dict(B.STRATEGIES[key]["params"], session="all")):
+        # first rules, the current ones (1H trend, structure-break) with the session filter off for synthetic times,
+        # and the AI Lab's support/resistance filter
+        bases = [dict(B.STRATEGIES[key]["params"], session="all"), dict(B.STRATEGIES[key]["params"], session="all", htf_filter=False, at_level=True)]
+        any_trades = False
+        for base in ([B.V1_PARAMS[key]] if key in B.V1_PARAMS else []) + bases:
             p = dict(base, trend_filter=False, fvg_min_atr=0.1)
             full = B.run(bars, key, p, MNQ, SET)["trades"]
             for m in (1100, 2200):
                 part = B.run(bars[:m], key, p, MNQ, SET)["trades"]
                 cut = bars[m - 1]["time"]
                 done = lambda ts: [t for t in ts if t["exit_time"] < cut]
-                assert done(part) == done(full), (key, m)
-            assert full, key
+                assert done(part) == done(full), (key, m, base)
+            any_trades = any_trades or bool(full)
+        assert any_trades, key
+
+
+def test_stop_entry_fills_only_when_price_trades_through():
+    bars = [bar(0, 100, 100.5, 99.5, 100), bar(1, 100, 100.8, 99.6, 100.5), bar(2, 100.5, 101.5, 100.2, 101.2)]
+    s = sig(type="stop", price=101.0, stop=99.0, avail=1, expires=3)
+    t = B.simulate(bars, [s], dict(P, rr=2), MNQ, SET, 0, 3)
+    assert t[0]["entry_time"] == bars[2]["time"] and t[0]["entry"] == 101.0  # not on bar 1 (high 100.8)
+
+
+def test_candle_patterns():
+    def mk(rows):
+        return [bar(i * 300, *r) for i, r in enumerate(rows)]
+    flat = [(100, 101, 99, 100)] * 20  # ATR about 2
+    eng = mk(flat + [(100, 100.2, 98.8, 99), (98.8, 101.5, 98.6, 101.3)])
+    hits = B._pattern_setups(eng, "engulfing", {}, 300)
+    assert hits and hits[-1]["sd"] == 1 and hits[-1]["ci"] == len(eng) - 1 and hits[-1]["stop"] == 98.6
+    pin = mk(flat + [(100, 100.3, 97, 100.2)])
+    assert B._pattern_setups(pin, "pin_bar", {}, 300)[-1]["sd"] == 1
+    star = mk(flat + [(101, 101.2, 98.5, 98.7), (98.6, 98.9, 98.3, 98.5), (98.6, 100.6, 98.5, 100.4)])
+    assert B._pattern_setups(star, "star", {}, 300)[-1]["sd"] == 1
 
 
 def test_higher_timeframe_trend_only_uses_closed_hours_and_new_york_session():

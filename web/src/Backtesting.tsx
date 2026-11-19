@@ -4,6 +4,7 @@ import { AreaSeries, createChart, type IChartApi, type ISeriesApi, type UTCTimes
 import { FlaskConical, Play } from 'lucide-react'
 import { api, fmtD, fmtP, fmtT, fmtUsd, type Metrics, type StrategyRow, type Version } from './api'
 import { useSettings } from './store'
+import { AiLab } from './Lab'
 import { Badge, Btn, Empty, ErrorText, Field, Metric, Panel, Simulated, Tabs, cx, inputCls } from './ui'
 
 const TFS = ['1m', '3m', '5m', '15m', '30m', '1H', '4H', '1D']
@@ -21,14 +22,14 @@ const useStrategies = () => useQuery({ queryKey: ['strategies'], queryFn: () => 
 const vname = (ss: StrategyRow[] | undefined, id: number | null) => { for (const s of ss ?? []) for (const v of s.versions) if (v.id === id) return `${s.name} v${v.version}`; return `#${id}` }
 
 export function Backtesting() {
-  const [tab, setTab] = useState<'run' | 'versions' | 'research'>('run')
+  const [tab, setTab] = useState<'lab' | 'run' | 'versions' | 'research'>('lab')
   return (
     <div className="flex h-full min-h-0 flex-col gap-3 p-3">
       <div className="flex items-center justify-between">
-        <Tabs value={tab} onChange={setTab} items={[['run', 'Run backtest'], ['versions', 'Strategies & versions'], ['research', 'Research']]} />
+        <Tabs value={tab} onChange={setTab} items={[['lab', 'AI Lab'], ['run', 'Run backtest'], ['versions', 'Strategies & versions'], ['research', 'Research']]} />
         <p className="text-[11px] text-text-2">Historical simulation on delayed/historical data. Results are simulated and do not predict future performance.</p>
       </div>
-      <div className="min-h-0 flex-1">{tab === 'run' ? <Run /> : tab === 'versions' ? <Versions /> : <Research />}</div>
+      <div className="min-h-0 flex-1">{tab === 'lab' ? <AiLab /> : tab === 'run' ? <Run /> : tab === 'versions' ? <Versions /> : <Research />}</div>
     </div>
   )
 }

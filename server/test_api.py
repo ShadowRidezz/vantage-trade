@@ -78,7 +78,7 @@ def test_backtest_research_and_brain(c):
     ids = {n["id"] for n in g["nodes"]}
     assert all(e["src"] in ids and e["dst"] in ids for e in g["edges"])
     assert {"pattern", "strategy", "research"} <= {n["category"] for n in g["nodes"]}  # engine rules, strategies, their backtests
-    assert g["stats"]["patterns"] >= 12 and g["stats"]["strategies"] == 2
+    assert g["stats"]["patterns"] >= 12 and g["stats"]["strategies"] == len(main.S.B.STRATEGIES)
     assert c.post("/api/versions/%d/adopt" % v["id"]).status_code == 400  # active, not a validated candidate
 
 

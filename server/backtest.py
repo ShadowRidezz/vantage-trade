@@ -29,6 +29,25 @@ STRATEGIES = {
                    "htf_filter": True, "confirm_break": 3},
     },
 }
+_PATTERN_PARAMS = {"rr": 2.0, "stop_buffer_ticks": 4, "max_wait": 3, "max_hold": 60, "trend_filter": False, "breakeven_r": 0.0,
+                   "direction": "both", "swing_k": 3, "fvg_min_atr": 0.25, "htf_filter": True, "session": "rth"}
+for _k, _n, _d in (
+    ("engulfing", "Engulfing Candle", "A candle whose body swallows the previous opposite candle's body (and is at least half an ATR). "
+                                      "Enter at the next open; stop beyond the two candles."),
+    ("pin_bar", "Pin Bar (Hammer / Shooting Star)", "A candle with a long rejection wick (at least twice the body and 60% of the range). "
+                                                    "Enter at the next open the way the wick rejected; stop beyond the wick."),
+    ("star", "Morning / Evening Star", "Three candles: a strong candle, a small pause candle, then a candle closing past the middle of the first. "
+                                       "Enter at the next open; stop beyond the three candles."),
+    ("inside_bar", "Inside Bar Breakout", "A candle inside the previous (mother) candle. With the 20/50 EMA trend, a stop order at the mother "
+                                          "candle's high (long) or low (short); stop at the other side of the mother candle."),
+    ("ema_pullback", "EMA Pullback", "EMA 20 above EMA 50 (below for shorts): price dips to the EMA 20 and closes back above it on a "
+                                     "candle in the trend direction. Enter at the next open; stop beyond the last two candles."),
+    ("orb", "Opening Range Breakout", "The 9:30-9:45 New York range: the first candle that closes outside it before noon. Enter at the "
+                                      "next open; stop at the other side of the range. One trade per day. Intraday charts only."),
+    ("order_block", "Order Block Retest", "After a structure break, a limit order at the edge of its order block (the last opposite candle "
+                                          "before the move). Stop beyond the far side of the block."),
+):
+    STRATEGIES[_k] = {"name": _n, "description": _d, "params": dict(_PATTERN_PARAMS)}
 # The first rules (v1). On 60 days of MNQ/NQ/ES/MES 5m+15m both lost money (FVG -0.04R, sweep -0.15R per trade);
 # the rules above were the only ones that were positive on those futures and better than these on 8 unseen stocks.
 V1_PARAMS = {
@@ -81,13 +100,134 @@ def htf_trend(bars, step):
     return at
 
 
-def signals(bars, an, key, params, tick):
+def _memo(cache, name, fn):
+    if name not in cache:
+        cache[name] = fn()
+    return cache[name]
+
+
+def _pattern_setups(bars, key, cache, step):
+    """Raw candle-pattern setups: dicts with ci (deciding candle), sd (+1/-1), stop (pattern extreme), name, and an
+    optional entry type/price. Each uses only candles up to and including ci."""
+    atr = _memo(cache, "atr", lambda: A.atr(bars, 14))
+    closes = [b["close"] for b in bars]
+    e20 = _memo(cache, "ema20", lambda: A.ema(closes, 20))
+    e50 = _memo(cache, "ema50", lambda: A.ema(closes, 50))
+    out = []
+    if key == "orb":
+        if not 0 < step < 3600:
+            return out
+        ranges, done = {}, set()
+        for i, b in enumerate(bars):
+            m, day = M.et_minutes(b["time"]), M.et_day(b["time"])
+            if 570 <= m and m + step // 60 <= 585:  # candle inside 9:30-9:45
+                hi, lo = ranges.get(day, (None, None))
+                ranges[day] = (max(hi, b["high"]) if hi is not None else b["high"], min(lo, b["low"]) if lo is not None else b["low"])
+            elif 585 <= m < 720 and day in ranges and day not in done:
+                hi, lo = ranges[day]
+                if b["close"] > hi or b["close"] < lo:
+                    done.add(day)
+                    sd = 1 if b["close"] > hi else -1
+                    out.append({"ci": i, "sd": sd, "stop": lo if sd == 1 else hi,
+                                "name": "close %s the opening range %s-%s" % ("above" if sd == 1 else "below", A.fmt(lo), A.fmt(hi))})
+        return out
+    for i in range(2, len(bars)):
+        b, p, q, a = bars[i], bars[i - 1], bars[i - 2], atr[i]
+        if not a:
+            continue
+        o, c, h, l = b["open"], b["close"], b["high"], b["low"]
+        body, rng = abs(c - o), h - l
+        if key == "engulfing":
+            pb = abs(p["close"] - p["open"])
+            if c > o and p["close"] < p["open"] and c >= p["open"] and o <= p["close"] and body >= max(pb, 0.5 * a):
+                out.append({"ci": i, "sd": 1, "stop": min(l, p["low"]), "name": "Bullish engulfing"})
+            elif c < o and p["close"] > p["open"] and c <= p["open"] and o >= p["close"] and body >= max(pb, 0.5 * a):
+                out.append({"ci": i, "sd": -1, "stop": max(h, p["high"]), "name": "Bearish engulfing"})
+        elif key == "pin_bar" and rng >= 0.8 * a:
+            lw, uw = min(o, c) - l, h - max(o, c)
+            if lw >= 2 * body and lw >= 0.6 * rng:
+                out.append({"ci": i, "sd": 1, "stop": l, "name": "Hammer (bullish pin bar)"})
+            elif uw >= 2 * body and uw >= 0.6 * rng:
+                out.append({"ci": i, "sd": -1, "stop": h, "name": "Shooting star (bearish pin bar)"})
+        elif key == "star":
+            qb, pb = abs(q["close"] - q["open"]), abs(p["close"] - p["open"])
+            mid = (q["open"] + q["close"]) / 2
+            if qb >= 0.6 * a and pb <= 0.3 * qb:
+                if q["close"] < q["open"] and c > o and c > mid:
+                    out.append({"ci": i, "sd": 1, "stop": min(l, p["low"], q["low"]), "name": "Morning star"})
+                elif q["close"] > q["open"] and c < o and c < mid:
+                    out.append({"ci": i, "sd": -1, "stop": max(h, p["high"], q["high"]), "name": "Evening star"})
+        elif key == "inside_bar" and e50[i] is not None:
+            if h < p["high"] and l > p["low"] and p["high"] - p["low"] >= 0.8 * a:
+                sd = 1 if e20[i] > e50[i] else -1
+                out.append({"ci": i, "sd": sd, "stop": p["low"] if sd == 1 else p["high"], "type": "stop",
+                            "price": p["high"] if sd == 1 else p["low"], "name": "Inside bar, breakout %s" % ("up" if sd == 1 else "down")})
+        elif key == "ema_pullback" and e50[i] is not None:
+            if e20[i] > e50[i] and l <= e20[i] < c and c > o and p["close"] > e20[i - 1]:
+                out.append({"ci": i, "sd": 1, "stop": min(l, p["low"]), "name": "Pullback to the rising EMA 20"})
+            elif e20[i] < e50[i] and h >= e20[i] > c and c < o and p["close"] < e20[i - 1]:
+                out.append({"ci": i, "sd": -1, "stop": max(h, p["high"]), "name": "Pullback to the falling EMA 20"})
+    return out
+
+
+def _at_level(bars, an, cache, ci, sd, look=100, tol=0.3):
+    """Did candle ci test a confirmed swing low (long) / high (short) from the last `look` candles and close back on the
+    right side of it? i.e. the pattern formed at support / resistance. Uses only swings confirmed by candle ci."""
+    atr = _memo(cache, "atr", lambda: A.atr(bars, 14))
+    side = _memo(cache, "swings:%d:%d" % (id(an), sd),
+                 lambda: [(s["ci"], s["i"], s["price"]) for s in an.get("swings", []) if s["side"] == ("low" if sd == 1 else "high")])
+    b, tol = bars[ci], tol * atr[ci]
+    for sci, si, p in side:
+        if sci > ci:
+            break
+        if si >= ci - look and (b["low"] <= p + tol and b["close"] > p if sd == 1 else b["high"] >= p - tol and b["close"] < p):
+            return True
+    return False
+
+
+def signals(bars, an, key, params, tick, cache=None):
+    """Every entry order the strategy would have placed. `cache` (a dict) may be shared between calls on the same
+    candles to avoid recomputing the 1H trend and indicators (the AI Lab does this)."""
+    cache = {} if cache is None else cache
     ix, trend, out = _idx(bars), an["trend"], []
     want = {"both": (1, -1), "long": (1,), "short": (-1,)}[params.get("direction", "both")]
     buf = params["stop_buffer_ticks"] * tick
-    step = _step(bars)
-    htf = htf_trend(bars, step) if params.get("htf_filter") else None
+    step = _memo(cache, "step", lambda: _step(bars))
+    htf = _memo(cache, "htf", lambda: htf_trend(bars, step)) if params.get("htf_filter") else None
     rth = params.get("session") == "rth" and 0 < step < 3600
+    if key not in ("fvg_continuation", "sweep_reversal"):
+        dets = {"bull": 1, "bear": -1}
+        if key == "order_block":
+            raw = [{"ci": ix[d["confirmed_at"]], "sd": dets[d["dir"]], "stop": d["bottom"] if d["dir"] == "bull" else d["top"],
+                    "type": "limit", "price": d["top"] if d["dir"] == "bull" else d["bottom"], "id": d["id"],
+                    "name": "Retest of the %s order block" % d["dir"]} for d in an["detections"] if d["kind"] == "order_block"]
+        else:
+            raw = _memo(cache, "pat:" + key, lambda: _pattern_setups(bars, key, cache, step))
+        for r in sorted(raw, key=lambda r: r["ci"]):
+            ci, sd = r["ci"], r["sd"]
+            dname = "bull" if sd == 1 else "bear"
+            if sd not in want or ci + 1 > len(bars):
+                continue
+            decided = bars[ci]["time"] + step
+            if rth and not RTH[0] <= M.et_minutes(decided) <= RTH[1]:
+                continue
+            if htf and htf(decided) != dname:
+                continue
+            if params.get("trend_filter") and trend[ci] != dname:
+                continue
+            if params.get("at_level") and not _at_level(bars, an, cache, ci, sd):
+                continue
+            typ = r.get("type", "market")
+            stop = r["stop"] - sd * buf
+            sig = {"avail": ci + 1, "dir": sd, "det_id": r.get("id", "%s:%s" % (key, bars[ci]["time"])), "trend": trend[ci], "type": typ,
+                   "stop": stop, "expires": ci + (1 if typ == "market" else max(1, int(params["max_wait"]))),
+                   "reason": "%s: %s" % (STRATEGIES[key]["name"], r["name"])}
+            if typ != "market":
+                sig["price"] = r["price"]
+                if (r["price"] - stop) * sd <= 0:
+                    continue
+            out.append(sig)
+        return out
     nb, cb = int(params.get("need_break", 0)), int(params.get("confirm_break", 0))
     breaks = sorted((ix[d["confirmed_at"]], d["dir"]) for d in an["detections"] if d["kind"] in STRUCTURE) if nb or cb else []
     used = set()
@@ -148,6 +288,11 @@ def simulate(bars, sigs, params, spec, settings, start, end, live=None):
                     if s["avail"] != i:
                         continue
                     fill = b["open"] + d * slip
+                elif s["type"] == "stop":  # buy above / sell below: fills when price trades through the level
+                    lvl = s["price"]
+                    if not (b["high"] >= lvl if d == 1 else b["low"] <= lvl):
+                        continue
+                    fill = (max(b["open"], lvl) if d == 1 else min(b["open"], lvl)) + d * slip
                 else:
                     lvl = s["price"]
                     if not (b["low"] <= lvl if d == 1 else b["high"] >= lvl):
@@ -158,7 +303,7 @@ def simulate(bars, sigs, params, spec, settings, start, end, live=None):
                 if risk <= 0:  # gapped through the stop before entry: no trade
                     continue
                 pos = {"dir": d, "entry": fill, "stop": s["stop"], "risk": risk, "target": fill + d * params["rr"] * risk,
-                       "entry_idx": i, "sig": s, "mfe": 0.0, "mae": 0.0, "be": False, "limit": s["type"] == "limit"}
+                       "entry_idx": i, "sig": s, "mfe": 0.0, "mae": 0.0, "be": False, "limit": s["type"] != "market"}
                 fill_bar = True
                 break
             pending = [s for s in pending if not s.get("used")]
@@ -264,6 +409,17 @@ def conditions_now(bars, an, key, params, tick):
     n, ix = len(an["trend"]), _idx(A.validate(bars)[0])
     bias = an["summary"]["bias"]
     conds = [{"name": "Structure trend is defined", "met": bias != "undetermined", "detail": bias}]
+    if key not in ("fvg_continuation", "sweep_reversal"):
+        live = [g for g in signals(bars, an, key, params, tick) if g["avail"] == n or (g["type"] != "market" and g["avail"] <= n <= g["expires"])]
+        conds.append({"name": "%s setup that passes its filters" % STRATEGIES[key]["name"], "met": bool(live), "detail": live[-1]["reason"] if live else "none"})
+        if not live:
+            return {"status": "No setup", "conditions": conds}
+        g = live[-1]
+        entry = g.get("price") or bars[-1]["close"]
+        tgt = entry + g["dir"] * params["rr"] * abs(entry - g["stop"])
+        return {"status": "%s %s, stop %s" % ("Long" if g["dir"] == 1 else "Short", g["type"] if g["type"] != "market" else "at next open", A.fmt(g["stop"])),
+                "conditions": conds, "det_id": g["det_id"],
+                "plan": {"dir": "long" if g["dir"] == 1 else "short", "entry": entry, "stop": g["stop"], "target": tgt, "touched": False}}
     if key == "fvg_continuation":
         recent = [d for d in an["detections"] if d["kind"] == "fvg" and ix.get(d["confirmed_at"], -1) >= n - 1 - params["max_wait"]]
         if params.get("trend_filter"):

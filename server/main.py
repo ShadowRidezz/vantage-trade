@@ -20,6 +20,7 @@ import llm
 import market as M
 import services as S
 import ai_trader as AT
+import lab as LAB
 import brain as B
 import brain_video as BV
 import video as V
@@ -139,6 +140,31 @@ def ai_trader_set(r: TraderReq):
     c = AT.configure(r.symbol.upper() if r.symbol else None, r.tf, r.enabled)
     threading.Thread(target=AT.step, daemon=True).start()  # don't wait 20 s for the first check on the new market
     return c
+
+
+@app.get("/api/ai-trader/status")
+def ai_trader_status():
+    return _call(AT.status)
+
+
+class LabReq(BaseModel):
+    targets: List[List[str]] = Field(..., min_length=1, max_length=16)
+
+
+@app.post("/api/lab/run")
+def lab_run(r: LabReq):
+    targets = []
+    for t in r.targets:
+        if len(t) != 2 or not re.fullmatch(SYM, t[0]) or not re.fullmatch(TF, t[1]):
+            raise HTTPException(422, "Each target is [symbol, timeframe].")
+        targets.append((t[0].upper(), t[1]))
+    return LAB.start(targets)
+
+
+@app.get("/api/lab")
+def lab_view(symbol: Optional[str] = Query(None, pattern=SYM), tf: Optional[str] = Query(None, pattern=TF)):
+    return {"state": LAB.state(), "gate": LAB.GATE, "grid": LAB.GRID, "split": LAB.SPLIT, "overview": LAB.overview(),
+            "run": LAB.latest(symbol.upper(), tf) if symbol and tf else None}
 
 
 @app.get("/api/ai-trades")
