@@ -221,7 +221,8 @@ def view():
     run = lab.latest(sym, tf)
     lab_info = {"state": lab.state(), "run": {k: run[k] for k in ("id", "created_at", "approved", "seconds", "bars")} if run else None,
                 "tested": len(run["results"]) if run else 0,
-                "elsewhere": [o for o in lab.overview() if o["approved"] and (o["symbol"], o["tf"]) != (sym, tf)]}
+                "elsewhere": sorted((o for o in lab.overview() if o["approved"] and (o["symbol"], o["tf"]) != (sym, tf)),
+                                   key=lambda o: o["symbol"] != sym)}  # same market on another timeframe first
     return {"config": c, "provider": M.provider_info(), "lab": lab_info, "spec": {k: v for k, v in spec.items() if k != "yahoo"},
             "bars": all_bars[-300:], "last_closed": closed[-1]["time"] if closed else None, "price": price,
             "market_quiet": age > 3 * M.TIMEFRAMES[tf][3] + 600, "trades": trades, "stats": st, "pending": pending,

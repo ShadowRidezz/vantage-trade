@@ -76,7 +76,7 @@ export function AiLab() {
           <div className="flex flex-wrap items-center gap-2 text-[12px]">
             <span className="font-semibold">{run.symbol} {run.tf}</span>
             <span className="text-text-2">{run.results.length} strategies × {variants} settings on {run.bars.toLocaleString()} candles in {run.seconds}s · tuned on candles before {fmtT(run.split_time)}, checked after · tested {fmtT(run.created_at)}</span>
-            {live === `${run.symbol} ${run.tf}` ? <Badge tone="bull">Live AI trades the approved ones</Badge>
+            {live === `${run.symbol} ${run.tf}` ? <Badge tone={run.results.some((r) => r.approved) ? 'bull' : 'muted'}>{run.results.some((r) => r.approved) ? 'Live AI trades the approved ones' : 'Live AI market: nothing approved, no trades'}</Badge>
               : run.results.some((r) => r.approved) && <Btn onClick={() => useLive.mutate({ symbol: run.symbol, tf: run.tf })} disabled={useLive.isPending}><Radio size={12} />Trade these live</Btn>}
           </div>
           <Panel title="Results (simulated)" bodyClass="overflow-auto p-0">
