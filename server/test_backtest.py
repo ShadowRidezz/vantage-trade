@@ -1,5 +1,8 @@
+import calendar
+
 import analysis as A
 import backtest as B
+import market as M
 from test_analysis import bar, walk
 
 MNQ = {"tick_size": 0.25, "tick_value": 0.5, "commission": 0.62}
@@ -45,16 +48,36 @@ def test_slippage_and_gap_through_stop_skips():
 
 
 def test_backtest_has_no_lookahead():
-    bars = walk(800, seed=3)
+    bars = walk(3000, seed=3)
     for key in B.STRATEGIES:
-        p = dict(B.STRATEGIES[key]["params"], trend_filter=False, fvg_min_atr=0.1)
-        full = B.run(bars, key, p, MNQ, SET)["trades"]
-        for m in (300, 550):
-            part = B.run(bars[:m], key, p, MNQ, SET)["trades"]
-            cut = bars[m - 1]["time"]
-            done = lambda ts: [t for t in ts if t["exit_time"] < cut]
-            assert done(part) == done(full), (key, m)
-        assert full, key
+        # first rules, and the current ones (1H trend, structure-break) with the session filter off for synthetic times
+        for base in (B.V1_PARAMS[key], dict(B.STRATEGIES[key]["params"], session="all")):
+            p = dict(base, trend_filter=False, fvg_min_atr=0.1)
+            full = B.run(bars, key, p, MNQ, SET)["trades"]
+            for m in (1100, 2200):
+                part = B.run(bars[:m], key, p, MNQ, SET)["trades"]
+                cut = bars[m - 1]["time"]
+                done = lambda ts: [t for t in ts if t["exit_time"] < cut]
+                assert done(part) == done(full), (key, m)
+            assert full, key
+
+
+def test_higher_timeframe_trend_only_uses_closed_hours_and_new_york_session():
+    bars = walk(3000, seed=5)
+    full = B.htf_trend(bars, 60)
+    for m in (700, 1500, 2600):
+        part = B.htf_trend(bars[:m], 60)
+        for b in bars[:m]:
+            assert part(b["time"] + 60) == full(b["time"] + 60)
+    assert {full(b["time"]) for b in bars} >= {"bull", "bear"}
+    assert M.et_minutes(calendar.timegm((2026, 7, 1, 13, 30, 0))) == 570  # 9:30 EDT
+    assert M.et_minutes(calendar.timegm((2026, 12, 1, 14, 30, 0))) == 570  # 9:30 EST
+    assert M.et_minutes(calendar.timegm((2026, 11, 1, 5, 59, 0))) == 119  # 1:59 EDT, just before clocks go back
+    p = dict(B.STRATEGIES["fvg_continuation"]["params"], trend_filter=False, fvg_min_atr=0.1, htf_filter=False, need_break=0)
+    an = A.run(bars)
+    rth = B.signals(bars, an, "fvg_continuation", p, 0.25)
+    assert len(rth) < len(B.signals(bars, an, "fvg_continuation", dict(p, session="all"), 0.25))
+    assert all(B.RTH[0] <= M.et_minutes(bars[s["avail"] - 1]["time"] + 60) <= B.RTH[1] for s in rth)
 
 
 def test_metrics():

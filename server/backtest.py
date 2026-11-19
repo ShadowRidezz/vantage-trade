@@ -6,30 +6,49 @@ and a limit entry's own candle is only checked against the stop (never the targe
 """
 from __future__ import annotations
 
+import bisect
+
 import analysis as A
+import market as M
 
 STRATEGIES = {
     "fvg_continuation": {
         "name": "FVG Continuation",
         "description": "With the structure trend, place a limit order at the near edge of a new Fair Value Gap. "
                        "Stop beyond the far edge plus a buffer, target a fixed R multiple.",
-        "params": {"rr": 2.0, "stop_buffer_ticks": 4, "max_wait": 20, "max_hold": 60, "trend_filter": True,
-                   "breakeven_r": 0.0, "direction": "both", "swing_k": 3, "fvg_min_atr": 0.25},
+        "params": {"rr": 3.0, "stop_buffer_ticks": 12, "max_wait": 20, "max_hold": 60, "trend_filter": True,
+                   "breakeven_r": 0.0, "direction": "both", "swing_k": 3, "fvg_min_atr": 0.25,
+                   "htf_filter": True, "session": "rth", "need_break": 3},
     },
     "sweep_reversal": {
         "name": "Liquidity Sweep Reversal",
         "description": "After a candle sweeps a confirmed swing and closes back inside, enter at the next open in the "
                        "reversal direction. Stop beyond the sweep extreme plus a buffer, target a fixed R multiple.",
-        "params": {"rr": 2.0, "stop_buffer_ticks": 4, "max_wait": 1, "max_hold": 60, "trend_filter": False,
-                   "breakeven_r": 0.0, "direction": "both", "swing_k": 3, "fvg_min_atr": 0.25},
+        "params": {"rr": 3.0, "stop_buffer_ticks": 4, "max_wait": 1, "max_hold": 60, "trend_filter": False,
+                   "breakeven_r": 0.0, "direction": "both", "swing_k": 3, "fvg_min_atr": 0.25,
+                   "htf_filter": True, "confirm_break": 3},
     },
 }
+# The first rules (v1). On 60 days of MNQ/NQ/ES/MES 5m+15m both lost money (FVG -0.04R, sweep -0.15R per trade);
+# the rules above were the only ones that were positive on those futures and better than these on 8 unseen stocks.
+V1_PARAMS = {
+    "fvg_continuation": {"rr": 2.0, "stop_buffer_ticks": 4, "max_wait": 20, "max_hold": 60, "trend_filter": True,
+                         "breakeven_r": 0.0, "direction": "both", "swing_k": 3, "fvg_min_atr": 0.25},
+    "sweep_reversal": {"rr": 2.0, "stop_buffer_ticks": 4, "max_wait": 1, "max_hold": 60, "trend_filter": False,
+                       "breakeven_r": 0.0, "direction": "both", "swing_k": 3, "fvg_min_atr": 0.25},
+}
+STRUCTURE = ("bos", "choch", "mss")
+RTH = (9 * 60 + 35, 15 * 60 + 30)  # New York time; the opening 5 minutes and the last half hour are left out
 
 PARAM_DOCS = {
     "rr": "Target as a multiple of the initial risk", "stop_buffer_ticks": "Ticks beyond the zone for the stop",
     "max_wait": "Candles a pending signal stays valid", "max_hold": "Candles before a time exit",
     "trend_filter": "Only trade in the direction of the structure trend", "breakeven_r": "Move stop to entry after this many R (0 = off)",
     "direction": "both, long or short", "swing_k": "Swing fractal size", "fvg_min_atr": "Minimum FVG size in ATR",
+    "htf_filter": "Only trade when the next timeframe up (1H for intraday) has the same structure trend",
+    "session": "rth = only signals between 9:35 and 15:30 New York time (intraday charts); all = any time",
+    "need_break": "Only FVGs that formed within this many candles of a structure break the same way (0 = off)",
+    "confirm_break": "After a sweep, wait up to this many candles for structure to break the same way, then enter (0 = enter at once)",
 }
 
 
@@ -41,16 +60,54 @@ def _idx(bars):
     return {b["time"]: i for i, b in enumerate(bars)}
 
 
+def _step(bars):
+    ds = sorted(b["time"] - a["time"] for a, b in zip(bars[-300:], bars[-299:]))
+    return ds[len(ds) // 2] if ds else 0
+
+
+def htf_trend(bars, step):
+    """Structure trend of the next timeframe up, built from these candles. A higher candle only counts once it has
+    closed, so this never looks ahead. Returns f(time) -> 'bull' / 'bear' / None, or None above 1H charts."""
+    size = 3600 if step < 3600 else 14400 if step < 14400 else 0
+    if step <= 0 or not size or size % step:
+        return None
+    hb = M.aggregate(bars, size // step, step)
+    tr = A.run(hb)["trend"] if len(hb) > 10 else []
+    closes = [h["time"] + size for h in A.validate(hb)[0]][:len(tr)]
+
+    def at(t):
+        i = bisect.bisect_right(closes, t) - 1
+        return tr[i] if i >= 0 else None
+    return at
+
+
 def signals(bars, an, key, params, tick):
     ix, trend, out = _idx(bars), an["trend"], []
     want = {"both": (1, -1), "long": (1,), "short": (-1,)}[params.get("direction", "both")]
     buf = params["stop_buffer_ticks"] * tick
-    for d in an["detections"]:
-        if d["kind"] != ("fvg" if key == "fvg_continuation" else "sweep"):
-            continue
+    step = _step(bars)
+    htf = htf_trend(bars, step) if params.get("htf_filter") else None
+    rth = params.get("session") == "rth" and 0 < step < 3600
+    nb, cb = int(params.get("need_break", 0)), int(params.get("confirm_break", 0))
+    breaks = sorted((ix[d["confirmed_at"]], d["dir"]) for d in an["detections"] if d["kind"] in STRUCTURE) if nb or cb else []
+    used = set()
+    kind = "fvg" if key == "fvg_continuation" else "sweep"
+    for d in sorted((d for d in an["detections"] if d["kind"] == kind), key=lambda d: d["confirmed_at"]):
         ci = ix[d["confirmed_at"]]
         sd = 1 if d["dir"] == "bull" else -1
         if sd not in want:
+            continue
+        if cb:  # confirmation entry: the trade is decided on the candle that breaks structure after the sweep
+            ci = next((j for j, bd in breaks if ci <= j <= ci + cb and bd == d["dir"]), None)
+            if ci is None or ci in used:
+                continue
+            used.add(ci)
+        elif nb and not any(ci - nb <= j <= ci and bd == d["dir"] for j, bd in breaks):
+            continue
+        decided = bars[ci]["time"] + step  # when the deciding candle closed
+        if rth and not RTH[0] <= M.et_minutes(decided) <= RTH[1]:
+            continue
+        if htf and htf(decided) != d["dir"]:
             continue
         tr = trend[ci]
         if params.get("trend_filter") and tr != d["dir"]:
@@ -64,7 +121,7 @@ def signals(bars, an, key, params, tick):
         else:
             stop = d["extreme"] - buf if sd == 1 else d["extreme"] + buf
             out.append(dict(base, type="market", stop=stop, expires=ci + 1,
-                            reason="Market after %s sweep of %s" % (d["dir"], A.fmt(d["level"]))))
+                            reason="Market after %s sweep of %s%s" % (d["dir"], A.fmt(d["level"]), " and a structure break" if cb else "")))
     out.sort(key=lambda s: s["avail"])
     return out
 
@@ -211,6 +268,11 @@ def conditions_now(bars, an, key, params, tick):
         recent = [d for d in an["detections"] if d["kind"] == "fvg" and ix.get(d["confirmed_at"], -1) >= n - 1 - params["max_wait"]]
         if params.get("trend_filter"):
             recent = [d for d in recent if d["dir"] == bias]
+        if any(params.get(p) for p in ("htf_filter", "need_break")) or params.get("session") == "rth":
+            allowed = {g["det_id"] for g in signals(bars, an, key, params, tick)}
+            conds.append({"name": "Passes the AI's filters (1H trend, New York session, structure break)",
+                          "met": any(d["id"] in allowed for d in recent), "detail": "%d of %d" % (sum(d["id"] in allowed for d in recent), len(recent))})
+            recent = [d for d in recent if d["id"] in allowed]
         live = [d for d in recent if d.get("filled_at") is None]
         conds.append({"name": "FVG formed in the last %d candles%s" % (params["max_wait"], " in trend direction" if params.get("trend_filter") else ""),
                       "met": bool(recent), "detail": "%d found" % len(recent)})
@@ -227,8 +289,14 @@ def conditions_now(bars, an, key, params, tick):
                     "entry touched" if touched else "waiting for price"), "conditions": conds, "det_id": d["id"],
                     "plan": {"dir": "long" if sd == 1 else "short", "entry": entry, "stop": stop, "target": tgt, "touched": touched}}
         return {"status": "No setup", "conditions": conds}
-    last = [d for d in an["detections"] if d["kind"] == "sweep" and ix.get(d["confirmed_at"]) == n - 1]
-    conds.append({"name": "Sweep on the latest closed candle", "met": bool(last), "detail": last[-1]["reason"] if last else "none"})
+    if params.get("confirm_break") or params.get("htf_filter"):
+        ready = {g["det_id"] for g in signals(bars, an, key, params, tick) if g["avail"] == n}
+        last = [d for d in an["detections"] if d["id"] in ready]
+        conds.append({"name": "Sweep, then structure broke the same way on the latest candle%s" % (" with the 1H trend" if params.get("htf_filter") else ""),
+                      "met": bool(last), "detail": last[-1]["reason"] if last else "none"})
+    else:
+        last = [d for d in an["detections"] if d["kind"] == "sweep" and ix.get(d["confirmed_at"]) == n - 1]
+        conds.append({"name": "Sweep on the latest closed candle", "met": bool(last), "detail": last[-1]["reason"] if last else "none"})
     if params.get("trend_filter"):
         conds.append({"name": "Sweep direction matches trend", "met": bool(last) and last[-1]["dir"] == bias, "detail": bias})
     ok = all(c["met"] for c in conds[1:])

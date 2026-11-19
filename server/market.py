@@ -1,6 +1,7 @@
 """Market data behind a provider abstraction. Every response says whether data is live, delayed, historical or simulated."""
 from __future__ import annotations
 
+import datetime
 import json
 import threading
 import time
@@ -106,6 +107,15 @@ def get_bars(symbol, tf, max_age=30):
     with _lock:
         _cache[key] = (time.time(), bars)
     return bars
+
+
+def et_minutes(t):
+    """Minutes after midnight New York time (US daylight saving: 2nd Sunday of March to 1st Sunday of November)."""
+    u = datetime.datetime.utcfromtimestamp(t)
+    mar = datetime.datetime(u.year, 3, 8, 7) + datetime.timedelta(days=(6 - datetime.date(u.year, 3, 8).weekday()) % 7)
+    nov = datetime.datetime(u.year, 11, 1, 6) + datetime.timedelta(days=(6 - datetime.date(u.year, 11, 1).weekday()) % 7)
+    e = u + datetime.timedelta(hours=-4 if mar <= u < nov else -5)
+    return e.hour * 60 + e.minute
 
 
 def closed_bars(bars, tf, now=None):

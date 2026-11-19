@@ -35,6 +35,24 @@ def seed():
             s.flush()
             s.add(StrategyVersion(strategy_id=row_.id, version=1, params=st["params"], status="active", note="Initial rules"))
         s.commit()
+        # Installs still on the first rules get the stricter ones as a new version; a version you adopted is left alone.
+        upgraded = False
+        for st, v in active_versions(s):
+            if st.key in B.V1_PARAMS and dict(v.params) == B.V1_PARAMS[st.key]:
+                n = s.query(StrategyVersion).filter_by(strategy_id=st.id).count() + 1
+                v.status = "archived"
+                # nothing manages an archived version's unfinished trade any more; it never closed, so it never counted
+                s.query(Trade).filter_by(source="ai", version_id=v.id, status="open").delete()
+                s.add(StrategyVersion(strategy_id=st.id, version=n, params=B.STRATEGIES[st.key]["params"], parent_id=v.id, status="active",
+                                      note="Stricter rules: only with the 1H trend%s. The first rules lost money on 60 days of futures data." % (
+                                          ", in the New York session, right after a structure break, 3R target" if st.key == "fvg_continuation"
+                                          else ", entering after structure breaks the same way, 3R target")))
+                upgraded = True
+        if upgraded:
+            t = s.get(db.AiTrader, 1)
+            if t:  # the new rules trade forward from now; earlier AI trades stay in the record
+                t.started_at = time.time()
+        s.commit()
 
 
 # ---------------------------------------------------------------- analysis

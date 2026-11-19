@@ -163,12 +163,16 @@ def view():
     with db.session() as s:
         rows = s.query(Trade).filter_by(source="ai", symbol=sym, tf=tf).order_by(Trade.entry_time).all()
         names = {v.id: "%s v%d" % (st.name, v.version) for st, v in S.active_versions(s)}
+        active = set(names)
         for v in s.query(db.StrategyVersion):
             names.setdefault(v.id, "%s v%d" % (s.get(db.Strategy, v.strategy_id).name, v.version))
-        trades = [dict(db.row(r), strategy=names.get(r.version_id, "")) for r in rows]
+        trades = [dict(db.row(r), strategy=names.get(r.version_id, ""), current_rules=r.version_id in active) for r in rows]
         for t in trades:
             t.pop("analysis", None)
-        st = stats(rows)
+        # the tracker scores the rules trading now; trades under older rules are counted separately
+        st = stats([r for r in rows if r.version_id in active])
+        old = [r for r in rows if r.version_id not in active and r.status == "closed"]
+        st["earlier"] = {"wins": sum((r.pnl or 0) > 0 for r in old), "losses": sum((r.pnl or 0) <= 0 for r in old)} if old else None
     price = all_bars[-1]["close"]
     spec = M.spec_for(sym)
     for t in trades:

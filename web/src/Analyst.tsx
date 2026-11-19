@@ -16,7 +16,8 @@ type View = {
   spec: { tick_size: number; tick_value: number; name: string }; bars: Bar[]; last_closed: number | null; price: number; market_quiet: boolean
   trades: AiTrade[]; pending: { dir: string; entry: number; stop: number; target: number; strategy: string }[]
   stats: { trades: number; wins: number; losses: number; win_rate: number | null; net_pnl: number; profit_factor: number | 'inf' | null
-    avg_r: number | null; max_drawdown: number; streak: { kind: string; count: number } | null; today: number }
+    avg_r: number | null; max_drawdown: number; streak: { kind: string; count: number } | null; today: number
+    earlier: { wins: number; losses: number } | null }
   status: { running: boolean; last_run: number | null; last_error: string | null; interval: number }
 }
 
@@ -199,6 +200,7 @@ function Tracker({ v }: { v?: View }) {
           <div className="mt-1 text-[12px] text-text-2">trades right</div></div>
       </div>
       <div className="flex justify-around text-[15px] font-semibold"><span className="text-bull">{s?.wins ?? 0} right</span><span className="text-bear">{s?.losses ?? 0} wrong</span></div>
+      {s?.earlier && <p className="-mt-1 text-center text-[11px] text-text-2">Current rules only. Earlier rules: {s.earlier.wins} right, {s.earlier.losses} wrong.</p>}
       {s && <div className="grid grid-cols-2 gap-2">
         {tile('Net P&L', fmtUsd(s.net_pnl), s.net_pnl > 0 ? 'bull' : s.net_pnl < 0 ? 'bear' : undefined)}
         {tile('Profit factor', s.profit_factor == null ? '—' : s.profit_factor === 'inf' ? '∞' : s.profit_factor.toFixed(2))}
