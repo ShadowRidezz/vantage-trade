@@ -82,8 +82,12 @@ def step():
     settings = {"capital": 10000, "commission": spec["commission"], "slippage_ticks": 1, "qty": 1}
     run = lab.latest(sym, tf)
     if run is None or time.time() - run["created_at"] > lab.MAX_AGE:
-        lab.start([(sym, tf)])  # background; until it finishes the trader keeps the previous approvals (or waits)
-    approved = (run or {}).get("approved") or []
+        # never trade on old approvals (after the app was closed for days, they replayed 10 losing trades):
+        # re-test first; it takes a few seconds. If another Lab run is busy, skip this check.
+        if lab.state()["running"]:
+            return
+        run = lab.run(sym, tf)
+    approved = run.get("approved") or []
     with _lock, db.session() as s:
         res, bars = S.analyze(sym, tf)
         if len(bars) < 30:

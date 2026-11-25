@@ -124,8 +124,12 @@ def run(symbol, tf):
     results.sort(key=lambda r: (not r["approved"], -((r["newer"] or {}).get("avg_r") or -9)))
     with db.session() as s:
         prev = s.query(LabRun).filter_by(symbol=symbol, tf=tf).order_by(LabRun.id.desc()).first()
-        since = {a["version_id"]: a["approved_since"] for a in (prev.approved or [])} if prev else {}
-        approved, now = [], time.time()
+        now = time.time()
+        # an approval only carries over from a run that was recent; after a gap, trading restarts from now,
+        # so candles this run was tuned on are never replayed as "live" trades
+        recent = prev is not None and now - prev.created_at <= 2 * MAX_AGE
+        since = {a["version_id"]: a["approved_since"] for a in (prev.approved or [])} if recent else {}
+        approved = []
         for r in results:
             if r["approved"]:
                 v = _version_for(s, r["key"], r["params"], symbol, tf)

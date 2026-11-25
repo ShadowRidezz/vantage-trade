@@ -76,6 +76,21 @@ def test_only_lab_approved_strategies_open_trades(c):
     AT.configure("MNQ", "5m", True)
 
 
+def test_old_approvals_are_never_used(c):
+    with db.session() as s:
+        s.add(db.LabRun(symbol="MNQ", tf="1H", bars=0, split_time=0, seconds=0, results=[], created_at=time.time() - 6 * 86400,
+                        approved=[{"key": "engulfing", "name": "x", "version_id": 1, "version": 1, "params": {}, "newer": {}, "approved_since": 0}]))
+        s.commit()
+    AT.configure("MNQ", "1H", True)
+    AT.step()  # the 6-day-old run must be replaced by a fresh one before anything trades
+    fresh = lab.latest("MNQ", "1H")
+    assert time.time() - fresh["created_at"] < 120
+    assert all(a["approved_since"] > time.time() - 120 for a in fresh["approved"])  # no carry-over after a gap
+    rows = _ai_rows(symbol="MNQ", tf="1H")
+    assert all(r["entry_time"] >= fresh["created_at"] - 3600 * 2 for r in rows)
+    AT.configure("MNQ", "5m", True)
+
+
 def test_closed_trades_are_final_and_steps_are_idempotent(c):
     before = _ai_rows(symbol="MNQ", tf="5m", status="closed")
     with db.session() as s:
