@@ -192,7 +192,7 @@ function Tracker({ v, onSwitch }: { v?: View; onSwitch: (m: { symbol: string; tf
     <div className="text-[11px] text-text-2">{label}</div><div className={cx('font-mono text-[16px] font-semibold', tone === 'bull' && 'text-bull', tone === 'bear' && 'text-bear')}>{value}</div></div>
   const st = v?.status
   return (
-    <aside className="flex min-h-0 flex-col gap-3 overflow-y-auto rounded-xl border border-line bg-panel p-4">
+    <aside className="flex min-h-0 flex-col gap-3 overflow-y-auto rounded-xl border border-line bg-panel p-4 [&>*]:shrink-0">{/* sections keep their height and the panel scrolls, instead of squeezing into each other */}
       <div className="flex items-center justify-between"><h2 className="text-[16px] font-semibold">AI Trade Tracker</h2><Badge tone="warn">Simulated</Badge></div>
       <div className="relative mx-auto grid size-[170px] shrink-0 place-items-center">
         <svg viewBox="0 0 170 170" className="absolute inset-0 -rotate-90">
